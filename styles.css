@@ -511,6 +511,9 @@ a { color: inherit; }
 .dot-ai { background: #c9ccd2; }
 .drs-chip { margin-left: auto; color: var(--dim-2); border: 1px solid var(--line-soft); padding: 2px 5px; opacity: .35; transition: all .2s; }
 .drs-chip.is-active { color: var(--good); border-color: rgba(182,255,92,.35); opacity: 1; }
+.assist-chip { color: var(--good); border: 1px solid rgba(182,255,92,.3); padding: 2px 5px; min-width: 38px; justify-content: center; transition: color .18s, border-color .18s; }
+.assist-chip.is-manual { color: var(--orange); border-color: rgba(255,77,31,.45); }
+.assist-chip.is-braking { color: #ffc36b; border-color: rgba(255,195,107,.45); }
 
 .race-message {
   position: absolute; left: 50%; top: 19%; transform: translate(-50%, -12px);

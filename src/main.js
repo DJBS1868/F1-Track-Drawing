@@ -35,6 +35,7 @@ const dom = {
   hudSpeed: $('hud-speed'), hudGear: $('hud-gear'), speedoFill: $('speedo-fill'),
   speedoTicks: $('speedo-ticks'), throttleFill: $('throttle-fill'),
   minimap: $('minimap'), minimapTrackName: $('minimap-track-name'), hudDrs: $('hud-drs'),
+  hudAssist: $('hud-assist'),
   raceMessage: $('race-message'), offTrack: $('off-track'),
   countdown: $('countdown'), countdownValue: $('countdown-value'),
   controlsHint: $('controls-hint'), touchControls: $('touch-controls'),
@@ -666,7 +667,7 @@ function enterRace(trackData) {
       vLong: 0, vLat: 0, prevVLong: 0, yawRate: 0, offroad: false, offTimer: 0,
       lapsCompleted: 0, lapStart: 0, prevS: 0, sNorm: 0, sectors: [false, false, false],
       bestLap: null, lastLap: null, topSpeed: 0, finished: false, finishTime: null,
-      finishPosition: 4, drs: false, trackDist: 0
+      finishPosition: 4, drs: false, trackDist: 0, assistState: 'auto'
     }
   };
 
@@ -708,6 +709,7 @@ function resetRaceState() {
   p.lastLap = null; p.topSpeed = 0;
   p.finished = false; p.finishTime = null; p.finishPosition = 4;
   p.drs = false; p.trackDist = 0;
+  p.assistState = 'auto';
   p.sNorm = ((r.locator.nearest(pose.x, pose.z).index % r.track.N) / r.track.N);
   p.prevS = p.sNorm;
   setCarPose(r.playerCar, pose.x, pose.z, pose.yaw);
@@ -933,26 +935,67 @@ let minimapFrame = 0;
 // cornering force than a real F1 car, and bleeds off sideways slide quickly so
 // the nose goes where you point it instead of washing wide into the scenery.
 const HANDLING = {
-  steerLowSpeed: 0.62,   // max steering angle at a crawl (rad)
-  steerHighSpeed: 0.24,  // max steering angle at 60 m/s
-  steerSpeedRef: 60,
-  steerResponse: 21,     // how fast your input reaches the wheels
-  yawResponse: 18,       // how fast the chassis follows the wheels
-  gripTrack: 54,         // lateral acceleration budget on asphalt (m/s²)
-  gripKerb: 44,
-  gripOffroad: 32,
-  gripHandbrake: 20,
-  sideGripTrack: 13.5,   // how quickly sideways velocity is killed
-  sideGripKerb: 12,
+  steerLowSpeed: 0.60,   // max steering angle at a crawl (rad)
+  steerHighSpeed: 0.19,  // max steering angle at speed (rad)
+  steerSpeedRef: 58,
+  steerResponse: 18,     // how fast your input reaches the wheels
+  yawResponse: 15,       // how fast the chassis follows the wheels
+  gripTrack: 46,         // lateral acceleration budget on asphalt (m/s²)
+  gripKerb: 38,
+  gripOffroad: 27,
+  gripHandbrake: 19,
+  sideGripTrack: 12.5,   // how quickly sideways velocity is killed
+  sideGripKerb: 11,
   sideGripOffroad: 5.5,
   sideGripHandbrake: 2.1,
   offroadPower: 0.55,    // engine output on grass, so you can drive back
   offroadDrag: 5.5
 };
 
+// The car drives its own throttle and brakes. The player owns the steering;
+// W/S are always available as a direct override for extra speed or stopping.
+const AUTODRIVE = {
+  lateral: 31,        // cornering budget used to plan safe corner speeds (m/s²)
+  brakeDecel: 24,     // braking force assumed when looking ahead (m/s²)
+  maxSpeed: 84,       // cruise ceiling in m/s (≈302 km/h)
+  offroadMax: 30,     // don't keep charging across the grass
+  minSpeed: 20,
+  cruiseThrottle: 0.4 // throttle that balances drag near the target speed
+};
+
+function autoDriveDemand(p, track) {
+  const N = track.N;
+  const base = Math.floor((((p.sNorm % 1) + 1) % 1) * N) % N;
+  const speed = Math.max(0, p.vLong);
+  const lookAhead = clamp(55 + speed * 1.55, 55, 190);
+  const stride = Math.max(1, Math.round(5 / track.step));
+  const maxSteps = Math.round(lookAhead / track.step);
+  let target = AUTODRIVE.maxSpeed;
+
+  // Scan the road ahead and find the fastest speed we can still brake down to
+  // every upcoming corner from. This does the "when do I lift?" thinking.
+  for (let d = 0; d <= maxSteps; d += stride) {
+    const s = track.samples[(base + d) % N];
+    const radius = Math.max(1 / Math.max(Math.abs(s.k), 1e-5), 24);
+    const corner = Math.sqrt(AUTODRIVE.lateral * radius);
+    const dist = d * track.step;
+    target = Math.min(target, Math.sqrt(corner * corner + 2 * AUTODRIVE.brakeDecel * dist));
+  }
+  if (p.offroad) target = Math.min(target, AUTODRIVE.offroadMax);
+  target = clamp(target, AUTODRIVE.minSpeed, AUTODRIVE.maxSpeed);
+
+  const gap = target - speed;
+  const throttle = clamp(AUTODRIVE.cruiseThrottle + gap * 0.55, 0, 1);
+  const brake = speed > target + 0.8
+    ? clamp((speed - target - 0.8) / 5, 0.12, 1)
+    : 0;
+  return { throttle, brake, target };
+}
+
 function readControls() {
   const active = race.state === 'racing';
   return {
+    active,
     gas: active && (input.gas || input.touchGas),
     brake: active && (input.brake || input.touchBrake),
     steer: active ? ((input.left || input.touchLeft ? 1 : 0) - (input.right || input.touchRight ? 1 : 0)) : 0,
@@ -964,12 +1007,36 @@ function updatePlayerPhysics(dt) {
   const p = race.player;
   const tr = race.track;
   const controls = readControls();
-  const gas = controls.gas;
-  const brake = controls.brake;
+  const manualGas = controls.gas;
+  const manualBrake = controls.brake;
   const handbrake = controls.handbrake;
 
-  p.throttle = damp(p.throttle, gas ? 1 : 0, 11, dt);
-  p.brake = damp(p.brake, brake ? 1 : 0, 16, dt);
+  let throttleDemand = 0;
+  let brakeDemand = 0;
+  let assistState = 'auto';
+
+  if (controls.active) {
+    if (manualBrake) {
+      // Player brake always wins — it is stronger than the auto brake.
+      brakeDemand = 1;
+      assistState = 'manual';
+    } else if (manualGas) {
+      // Player throttle overrides the speed planner so you can chase a faster lap.
+      throttleDemand = 1;
+      assistState = 'manual';
+    } else if (!handbrake) {
+      const auto = autoDriveDemand(p, race.track);
+      throttleDemand = auto.throttle;
+      brakeDemand = auto.brake;
+      assistState = auto.brake > 0.15 ? 'auto-brake' : 'auto';
+    } else {
+      assistState = 'manual';
+    }
+  }
+  p.assistState = assistState;
+
+  p.throttle = damp(p.throttle, throttleDemand, 11, dt);
+  p.brake = damp(p.brake, brakeDemand, 16, dt);
   p.steer = damp(p.steer, controls.steer, HANDLING.steerResponse, dt);
 
   const speed0 = Math.hypot(p.vel.x, p.vel.z);
@@ -1007,13 +1074,13 @@ function updatePlayerPhysics(dt) {
   p.drs = drs;
 
   let accel = 0;
-  if (gas) {
+  if (p.throttle > 0.01) {
     const maxSpeed = drs ? 96 : 90;
     const ratio = clamp(vLong / maxSpeed, -1, 1);
     const engine = 18.5 * Math.max(0, 1 - ratio * ratio);
-    accel += engine * (p.offroad ? HANDLING.offroadPower : 1);
+    accel += engine * p.throttle * (p.offroad ? HANDLING.offroadPower : 1);
   }
-  if (brake) {
+  if (p.brake > 0.01) {
     if (vLong > 0.35) accel -= 33 * p.brake;
     else accel -= 6.8 * p.brake;
   }
@@ -1023,7 +1090,7 @@ function updatePlayerPhysics(dt) {
   accel -= drag;
   vLong += accel * dt;
   if (vLong < -12) vLong = -12;
-  if (!gas && !brake && !handbrake && Math.abs(vLong) < 0.2) vLong = 0;
+  if (p.throttle < 0.02 && p.brake < 0.02 && !handbrake && Math.abs(vLong) < 0.2) vLong = 0;
 
   const sideGrip = p.offroad
     ? HANDLING.sideGripOffroad
@@ -1278,6 +1345,10 @@ function updateHUD(dt) {
   dom.hudGear.textContent = gearFor(kmh, p.vLong);
   dom.speedoFill.style.strokeDashoffset = String(100 - clamp(kmh / 320, 0, 1) * 100);
   dom.throttleFill.style.height = `${Math.round(p.throttle * 100)}%`;
+  const assist = p.assistState || 'auto';
+  dom.hudAssist.textContent = assist === 'manual' ? 'MANUAL' : assist === 'auto-brake' ? 'BRAKING' : 'AUTO';
+  dom.hudAssist.classList.toggle('is-manual', assist === 'manual');
+  dom.hudAssist.classList.toggle('is-braking', assist === 'auto-brake');
   dom.hudDrs.classList.toggle('is-active', p.drs);
   dom.hudDrs.textContent = p.drs ? 'DRS OPEN' : 'DRS READY';
   dom.offTrack.classList.toggle('show', race.state === 'racing' && p.offroad && Math.abs(p.vLong) > 2.5);
@@ -1417,6 +1488,11 @@ function startRaceNow() {
   r.world.setStartLights(0);
   audio.countdown('go');
   dom.countdown.classList.add('show');
+  setTimeout(() => {
+    if (race && race.state === 'racing') {
+      showRaceMessage('AUTO THROTTLE', 'FOCUS ON STEERING · W/S OVERRIDE', 2400);
+    }
+  }, 1100);
 }
 
 function updateCountdown(dt) {
@@ -1859,7 +1935,8 @@ async function boot() {
     restartRace,
     demoPoints,
     demoRace: (index = 0, opts = {}) => beginBuild(demoPoints(index), { instant: true, ...opts }),
-    setDemoInput: (obj) => Object.assign(input, obj)
+    setDemoInput: (obj) => Object.assign(input, obj),
+    tick: (dt = 1 / 60) => { if (race && race.state !== 'paused') updateRace(dt); }
   };
 }
 
