@@ -637,7 +637,8 @@ function enterRace(trackData) {
       finished: false,
       finishTime: null,
       phase: Math.random() * TAU,
-      lateral: i % 2 === 0 ? 2.9 : -2.9
+      lateral: i % 2 === 0 ? 2.9 : -2.9,
+      baseLateral: i % 2 === 0 ? 2.9 : -2.9
     };
   });
 
@@ -724,6 +725,7 @@ function resetRaceState() {
     a.finished = false;
     a.finishTime = null;
     a.lateral = i % 2 === 0 ? 2.9 : -2.9;
+    a.baseLateral = a.lateral;
     a.phase = Math.random() * TAU;
     setCarPose(a.model, gp.x, gp.z, gp.yaw);
     a.model.body.rotation.set(0, 0, 0);
@@ -1242,31 +1244,149 @@ function updatePlayerProgress(dt) {
 /* ═══════════════════════════════════════════════════════════════════
    AI drivers
    ═══════════════════════════════════════════════════════════════════ */
-function resolveCarCollisions() {
+/* Cars are three overlapping circles rather than one big invisible circle, so
+   contact happens where the bodywork actually is. When you run into another
+   car you scrub speed and get nudged along it — the closing speed is killed,
+   never reflected, so you are not fired backwards like a rubber ball. */
+const CONTACT = {
+  offsets: [1.45, 0, -1.45],
+  radii: [1.02, 1.06, 1.02]
+};
+const SPARK_COLOR = new THREE.Color(0xffb257);
+const playerCircles = new Float32Array(6);
+const aiCircles = new Float32Array(6);
+let contactCooldown = 0;
+
+function fillCarCircles(x, z, yaw, out) {
+  const fx = Math.sin(yaw);
+  const fz = Math.cos(yaw);
+  for (let i = 0; i < 3; i++) {
+    const o = CONTACT.offsets[i];
+    out[i * 2] = x + fx * o;
+    out[i * 2 + 1] = z + fz * o;
+  }
+  return out;
+}
+
+function resolveCarCollisions(dt = 1 / 60) {
   const p = race.player;
-  const minGap = 3.1;
+  const tr = race.track;
+  if (contactCooldown > 0) contactCooldown = Math.max(0, contactCooldown - dt);
+
+  fillCarCircles(p.pos.x, p.pos.z, p.yaw, playerCircles);
+
   for (const a of race.ai) {
-    const dx = p.pos.x - a.model.root.position.x;
-    const dz = p.pos.z - a.model.root.position.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist >= minGap || dist < 0.001) continue;
-    const nx = dx / dist;
-    const nz = dz / dist;
-    const push = minGap - dist;
-    p.pos.x += nx * push;
-    p.pos.z += nz * push;
-    const vn = p.vel.x * nx + p.vel.z * nz;
-    if (vn < 0) {
-      p.vel.x -= nx * vn * 1.15;
-      p.vel.z -= nz * vn * 1.15;
+    const ax = a.model.root.position.x;
+    const az = a.model.root.position.z;
+    const ayaw = a.model.root.rotation.y;
+    fillCarCircles(ax, az, ayaw, aiCircles);
+
+    let overlap = 0;
+    let nx = 0;
+    let nz = 0;
+    let contactX = 0;
+    let contactZ = 0;
+    for (let i = 0; i < 3; i++) {
+      const px = playerCircles[i * 2];
+      const pz = playerCircles[i * 2 + 1];
+      for (let j = 0; j < 3; j++) {
+        const cx = aiCircles[j * 2];
+        const cz = aiCircles[j * 2 + 1];
+        const dx = px - cx;
+        const dz = pz - cz;
+        const dist = Math.hypot(dx, dz) || 0.0001;
+        const deep = CONTACT.radii[i] + CONTACT.radii[j] - dist;
+        if (deep <= overlap) continue;
+        overlap = deep;
+        nx = dx / dist;
+        nz = dz / dist;
+        contactX = (px + cx) * 0.5;
+        contactZ = (pz + cz) * 0.5;
+      }
     }
+    if (overlap <= 0) continue;
+
+    const aFx = Math.sin(ayaw);
+    const aFz = Math.cos(ayaw);
+    const aRx = Math.cos(ayaw);
+    const aRz = -Math.sin(ayaw);
+    const aiVx = aFx * a.speed;
+    const aiVz = aFz * a.speed;
+    const relVx = p.vel.x - aiVx;
+    const relVz = p.vel.z - aiVz;
+    const vn = relVx * nx + relVz * nz;
+
+    // Split the positional separation between the two cars. The player is
+    // shoved sideways off the other car; the AI takes the rest as a shove
+    // along the track, so you can lean on it and muscle past instead of
+    // bouncing back down the road.
+    const push = Math.min(overlap, 0.7);
+    p.pos.x += nx * push * 0.55;
+    p.pos.z += nz * push * 0.55;
+
+    const s = sampleAtDistance(tr, a.dist);
+    const shove = push * 0.5;
+    a.dist += (s.tx * -nx + s.tz * -nz) * shove;
+    const latLimit = Math.max(2.4, tr.halfWidth - 1.6);
+    a.lateral = clamp(a.lateral + (s.nx * -nx + s.nz * -nz) * shove, -latLimit, latLimit);
+
+    // Contact is always worth a small scrub and a side-step, even when the
+    // relative speed is tiny, so cars rub instead of sticking together.
     const fx = Math.sin(p.yaw);
     const fz = Math.cos(p.yaw);
     const rx = Math.cos(p.yaw);
     const rz = -Math.sin(p.yaw);
+    let impact = 0;
+    if (vn < 0) {
+      impact = Math.min(1, Math.abs(vn) / 26);
+      // Remove only the speed heading into the other car. Whatever speed you
+      // carry along the contact patch stays, so you keep driving forward.
+      p.vel.x -= nx * vn;
+      p.vel.z -= nz * vn;
+      const tanVx = relVx - nx * vn;
+      const tanVz = relVz - nz * vn;
+      const scrub = 0.07 + impact * 0.16;
+      p.vel.x -= tanVx * scrub;
+      p.vel.z -= tanVz * scrub;
+
+      // How square-on the hit is: 1 = straight up the gearbox, 0 = pure
+      // side swipe. Square-on hits get a firm side-step so you peel around
+      // the car ahead instead of grinding along behind it.
+      const squareOn = Math.abs(nx * fx + nz * fz);
+      const sideOff = (p.pos.x - ax) * aRx + (p.pos.z - az) * aRz;
+      const side = Math.abs(sideOff) > 0.12 ? Math.sign(sideOff) : (p.vLat >= 0 ? 1 : -1);
+      const escape = (0.5 + impact * 3.2) * (0.35 + squareOn * 0.65);
+      p.vel.x += aRx * side * escape;
+      p.vel.z += aRz * side * escape;
+
+      // A shove up the road for the car ahead, so it does not feel like a wall.
+      a.speed += impact * 1.8;
+    }
+
     p.vLong = p.vel.x * fx + p.vel.z * fz;
     p.vLat = p.vel.x * rx + p.vel.z * rz;
-    a.speed = Math.max(0, a.speed - 1.5);
+    // The shove changed where the player is; refresh its circles before the
+    // next car is tested so a three-wide squeeze resolves in one frame.
+    fillCarCircles(p.pos.x, p.pos.z, p.yaw, playerCircles);
+
+    // Keep the AI model where we just shoved it so the next frame agrees.
+    const as = sampleAtDistance(tr, a.dist);
+    const lat = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.85;
+    const ax2 = as.x + as.nx * lat;
+    const az2 = as.z + as.nz * lat;
+    a.model.root.position.set(ax2, 0, az2);
+    a.model.root.rotation.y = Math.atan2(as.tx, as.tz);
+
+    if (vn < -1.4 && contactCooldown <= 0) {
+      contactCooldown = 0.22;
+      const power = clamp(Math.abs(vn) / 24, 0.15, 1);
+      for (let k = 0; k < 7; k++) {
+        race.smoke.emit(contactX, 0.45 + Math.random() * 0.5, contactZ, SPARK_COLOR,
+          0.2 + Math.random() * 0.18, 0.24 + Math.random() * 0.2, 3.4);
+      }
+      race.impactShake = Math.max(race.impactShake || 0, 0.25 + power * 0.45);
+      audio.impact(power);
+    }
   }
 }
 
@@ -1289,6 +1409,9 @@ function updateAI(dt) {
     }
 
     const s = sampleAtDistance(tr, a.dist);
+    // A shove from contact pushes the AI off line; it eases back over a couple
+    // of seconds instead of staying wide for the rest of the race.
+    a.lateral = damp(a.lateral, a.baseLateral ?? 0, 0.55, dt);
     const lateral = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.85;
     const x = s.x + s.nx * lateral;
     const z = s.z + s.nz * lateral;
@@ -1465,7 +1588,9 @@ function updateRaceCamera(dt) {
     }
   }
 
-  const shake = (p.onKerb ? 0.035 : 0) + (p.offroad ? 0.07 : 0) + clamp(speed / 90, 0, 1) * 0.012;
+  const impactKick = race.impactShake || 0;
+  race.impactShake = impactKick * Math.exp(-7 * dt);
+  const shake = (p.onKerb ? 0.035 : 0) + (p.offroad ? 0.07 : 0) + impactKick + clamp(speed / 90, 0, 1) * 0.012;
   if (shake > 0.001 && race.state !== 'paused') {
     race.camera.position.x += (Math.random() - 0.5) * shake;
     race.camera.position.y += (Math.random() - 0.5) * shake * 0.7;
@@ -1570,7 +1695,7 @@ function updateRace(dt) {
     race.time += dt * 1000;
     updatePlayerPhysics(dt);
     updateAI(dt);
-    resolveCarCollisions();
+    resolveCarCollisions(dt);
     updatePlayerVisual(dt);
     updatePlayerProgress(dt);
     race.smoke.update(dt);
@@ -1586,7 +1711,7 @@ function updateRace(dt) {
   if (race.state === 'finished') {
     updatePlayerPhysics(dt);
     updateAI(dt);
-    resolveCarCollisions();
+    resolveCarCollisions(dt);
     updatePlayerVisual(dt);
     race.smoke.update(dt);
     updateRaceCamera(dt);

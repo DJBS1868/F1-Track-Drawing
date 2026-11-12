@@ -80,6 +80,43 @@ export class AudioEngine {
     this.tone(300 + index * 90, 0.1, 0.03, 'triangle');
   }
 
+  // Wheel-to-wheel contact: a low thump plus a short carbon crunch.
+  impact(strength = 0.5) {
+    const ctx = this.ensure();
+    if (!ctx) return;
+    const power = Math.max(0, Math.min(1, strength));
+    const t = ctx.currentTime;
+
+    const thump = ctx.createOscillator();
+    const thumpGain = ctx.createGain();
+    thump.type = 'triangle';
+    thump.frequency.setValueAtTime(120 + power * 90, t);
+    thump.frequency.exponentialRampToValueAtTime(42, t + 0.18);
+    thumpGain.gain.setValueAtTime(0.0001, t);
+    thumpGain.gain.exponentialRampToValueAtTime(0.06 + power * 0.1, t + 0.01);
+    thumpGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+    thump.connect(thumpGain);
+    thumpGain.connect(this.master);
+    thump.start(t);
+    thump.stop(t + 0.26);
+
+    const crunch = ctx.createBufferSource();
+    crunch.buffer = this._noiseBuffer(0.2);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1800 + power * 2200;
+    filter.Q.value = 0.8;
+    const crunchGain = ctx.createGain();
+    crunchGain.gain.setValueAtTime(0.0001, t);
+    crunchGain.gain.exponentialRampToValueAtTime(0.03 + power * 0.07, t + 0.006);
+    crunchGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    crunch.connect(filter);
+    filter.connect(crunchGain);
+    crunchGain.connect(this.master);
+    crunch.start(t);
+    crunch.stop(t + 0.2);
+  }
+
   _noiseBuffer(seconds = 2) {
     const ctx = this.ctx;
     const buffer = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
