@@ -1,6 +1,7 @@
 import {
   clamp, lerp, TAU, wrapAngle, hashString, mulberry32, formatTime
 } from './utils.js';
+import { CIRCUIT_TEMPLATES } from './circuits.js';
 
 /* ═══════════════════════════════════════════════════════════════════
    Canvas-line analysis
@@ -269,10 +270,10 @@ export function trackNameFor(points) {
 
 /* ═══════════════════════════════════════════════════════════════════
    Endless inspiration tracks
-   A random convex ring of 5-11 corners, with every corner filleted by a
-   random radius. That leaves genuine straights between real corners, so
-   the result reads as a circuit rather than a wobbly blob. A convex ring
-   and conservative fillets can never self-intersect.
+   A real Grand Prix centre line is mirrored, stretched, rotated and
+   deformed by a smooth warp field. The underlying shape keeps the straights
+   and corner sequences that make a circuit feel real; the warp makes every
+   roll a new layout. Mutations that fold the loop are rejected and rerolled.
    Every roll is seeded from the clock, so the well is infinite.
    ═══════════════════════════════════════════════════════════════════ */
 
@@ -295,54 +296,96 @@ const vUnit = (a) => {
   return { x: a.x / len, y: a.y / len };
 };
 
-function buildPolygonVertices(rng) {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const count = 5 + Math.floor(rng() * 7);
-    const gaps = [];
-    let gapSum = 0;
-    for (let i = 0; i < count; i++) {
-      const gap = 0.5 + rng() * 1.6;
-      gaps.push(gap);
-      gapSum += gap;
-    }
-
-    // Stretch the ring so some circuits are wide and others are tall.
-    const stretchX = 0.85 + rng() * 0.35;
-    const stretchY = 0.85 + rng() * 0.35;
-    const start = rng() * TAU;
-    // Tighten the radius spread if the first rolls are not convex.
-    const spread = attempt < 16 ? 1 : attempt < 32 ? 0.65 : 0.35;
-    const verts = [];
-    let angle = start;
-    for (let i = 0; i < count; i++) {
-      angle += (gaps[i] / gapSum) * TAU;
-      const radius = 1 + (rng() * 2 - 1) * 0.27 * spread;
-      verts.push({
-        x: Math.cos(angle) * radius * stretchX,
-        y: Math.sin(angle) * radius * stretchY
-      });
-    }
-
-    let convex = true;
-    for (let i = 0; i < count; i++) {
-      const prev = verts[(i - 1 + count) % count];
-      const cur = verts[i];
-      const next = verts[(i + 1) % count];
-      if (vCross(vSub(cur, prev), vSub(next, cur)) <= 0.015) {
-        convex = false;
-        break;
-      }
-      const inA = vUnit(vSub(prev, cur));
-      const inB = vUnit(vSub(next, cur));
-      const interior = Math.acos(clamp(inA.x * inB.x + inA.y * inB.y, -1, 1));
-      if (interior < 0.22 || interior > 2.86) {
-        convex = false;
-        break;
-      }
-    }
-    if (convex) return verts;
+// ── real-circuit DNA ─────────────────────────────────────────────────
+// The templates in circuits.js are sampled centre lines of real Grand Prix
+// circuits. Each roll mirrors, stretches, rotates and warps one of them with
+// a smooth displacement field plus a few localised bulges. That keeps the
+// essential shape language — long straights, proper hairpins, tight street
+// corners — while producing a brand-new layout every time.
+const TRACK_TEMPLATES = CIRCUIT_TEMPLATES.map((template) => {
+  const points = [];
+  for (let i = 0; i < template.points.length; i += 2) {
+    points.push({ x: template.points[i], y: template.points[i + 1] });
   }
-  return null;
+  return { name: template.name, points };
+});
+
+function mutateCircuit(template, rng) {
+  const points = template.points;
+  const n = points.length;
+
+  const mirror = rng() < 0.5 ? -1 : 1;
+  const rotation = rng() * TAU;
+  const stretchX = 0.92 + rng() * 0.16;
+  const stretchY = 0.92 + rng() * 0.16;
+  const warpX = (rng() * 2 - 1) * 0.016;
+  const warpX2 = (rng() * 2 - 1) * 0.008;
+  const warpY = (rng() * 2 - 1) * 0.016;
+  const warpY2 = (rng() * 2 - 1) * 0.008;
+  const freq1 = 1 + Math.floor(rng() * 2);
+  const freq2 = 2 + Math.floor(rng() * 2);
+  const phase1 = rng() * TAU;
+  const phase2 = rng() * TAU;
+  const phase3 = rng() * TAU;
+  const phase4 = rng() * TAU;
+
+  // Normalised distance around the lap, used to place local bulges.
+  const arc = new Float64Array(n);
+  let total = 0;
+  const seg = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    seg[i] = Math.hypot(b.x - a.x, b.y - a.y);
+    total += seg[i];
+  }
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    arc[i] = acc / total;
+    acc += seg[i];
+  }
+
+  // One to three smooth bulges / pinches. These are what turn a familiar
+  // circuit into a new one without breaking it into a scribble.
+  const bumps = [];
+  const bumpCount = 1 + Math.floor(rng() * 3);
+  for (let k = 0; k < bumpCount; k++) {
+    bumps.push({
+      center: rng(),
+      width: 0.045 + rng() * 0.06,
+      amp: (rng() * 2 - 1) * (0.012 + rng() * 0.02)
+    });
+  }
+
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  return points.map((point, i) => {
+    let px = (point.x - 0.5) * mirror * stretchX;
+    let py = (point.y - 0.5) * stretchY;
+
+    px += warpX * Math.sin(TAU * freq1 * py + phase1)
+      + warpX2 * Math.sin(TAU * freq2 * px + phase2);
+    py += warpY * Math.sin(TAU * freq1 * px + phase3)
+      + warpY2 * Math.sin(TAU * freq2 * py + phase4);
+
+    const prev = points[(i - 1 + n) % n];
+    const next = points[(i + 1) % n];
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const tl = Math.hypot(tx, ty) || 1;
+    let offset = 0;
+    for (const bump of bumps) {
+      let d = Math.abs(arc[i] - bump.center);
+      d = Math.min(d, 1 - d);
+      offset += bump.amp * Math.exp(-(d * d) / (2 * bump.width * bump.width));
+    }
+    px += (-ty / tl) * offset;
+    py += (tx / tl) * offset;
+
+    const rx = px * cos - py * sin;
+    const ry = px * sin + py * cos;
+    return { x: 0.5 + rx, y: 0.5 + ry };
+  });
 }
 
 function filletPolygon(verts, rng) {
@@ -354,14 +397,22 @@ function filletPolygon(verts, rng) {
     const c = verts[(i + 1) % n];
     const uBA = vUnit(vSub(a, b));
     const uBC = vUnit(vSub(c, b));
-    const interior = Math.acos(clamp(uBA.x * uBC.x + uBA.y * uBC.y, -1, 1));
+    // The angle between the two edges, always measured as the smaller of
+    // the pair. Reflex corners (interior > 180°) still fillet on the
+    // outside of the turn, so using the smaller angle keeps the radius
+    // positive and the arc on the correct side.
+    const phi = Math.acos(clamp(uBA.x * uBC.x + uBA.y * uBC.y, -1, 1));
     const edge = Math.min(vDist(a, b), vDist(b, c));
-    // Sweepers get a slightly wider arc, tighter corners a small radius.
-    const frac = interior > 1.9 ? 0.032 + rng() * 0.05 : 0.022 + rng() * 0.04;
-    const tangent = edge * frac;
-    const radius = tangent * Math.tan(interior / 2);
+    // Tight corners need enough tangent to make a real hairpin; fast
+    // sweepers need only a little so the main straight stays long.
+    let frac;
+    if (phi < 1.15) frac = 0.18 + rng() * 0.16;
+    else if (phi > 2.05) frac = 0.07 + rng() * 0.09;
+    else frac = 0.11 + rng() * 0.13;
+    const tangent = Math.min(edge * frac, edge * 0.42);
+    const radius = tangent * Math.tan(phi / 2);
     const bisector = vUnit({ x: uBA.x + uBC.x, y: uBA.y + uBC.y });
-    const offset = radius / Math.sin(interior / 2);
+    const offset = radius / Math.sin(phi / 2);
     const center = { x: b.x + bisector.x * offset, y: b.y + bisector.y * offset };
     const p = { x: b.x + uBA.x * tangent, y: b.y + uBA.y * tangent };
     const q = { x: b.x + uBC.x * tangent, y: b.y + uBC.y * tangent };
@@ -417,8 +468,9 @@ function filletPolygon(verts, rng) {
 }
 
 function polygonLoop(rng) {
-  const verts = buildPolygonVertices(rng);
-  return verts ? filletPolygon(verts, rng) : null;
+  if (!TRACK_TEMPLATES.length) return null;
+  const template = TRACK_TEMPLATES[Math.floor(rng() * TRACK_TEMPLATES.length)];
+  return mutateCircuit(template, rng);
 }
 
 function fitToCanvas(unitPts, width, height) {

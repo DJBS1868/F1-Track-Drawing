@@ -755,6 +755,7 @@ function resetRaceState() {
   r.state = 'countdown';
   r.world.setStartLights(0);
   r.smoke.reset();
+  audio.setPaused(false);
 
   dom.countdown.classList.add('show');
   dom.countdownValue.textContent = '3';
