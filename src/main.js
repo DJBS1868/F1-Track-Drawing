@@ -929,6 +929,27 @@ const SMOKE_COLOR = new THREE.Color(0xdad7d0);
 let emitAccum = 0;
 let minimapFrame = 0;
 
+// Arcade-first handling. The car turns in almost immediately, carries more
+// cornering force than a real F1 car, and bleeds off sideways slide quickly so
+// the nose goes where you point it instead of washing wide into the scenery.
+const HANDLING = {
+  steerLowSpeed: 0.62,   // max steering angle at a crawl (rad)
+  steerHighSpeed: 0.24,  // max steering angle at 60 m/s
+  steerSpeedRef: 60,
+  steerResponse: 21,     // how fast your input reaches the wheels
+  yawResponse: 18,       // how fast the chassis follows the wheels
+  gripTrack: 54,         // lateral acceleration budget on asphalt (m/s²)
+  gripKerb: 44,
+  gripOffroad: 32,
+  gripHandbrake: 20,
+  sideGripTrack: 13.5,   // how quickly sideways velocity is killed
+  sideGripKerb: 12,
+  sideGripOffroad: 5.5,
+  sideGripHandbrake: 2.1,
+  offroadPower: 0.55,    // engine output on grass, so you can drive back
+  offroadDrag: 5.5
+};
+
 function readControls() {
   const active = race.state === 'racing';
   return {
@@ -949,20 +970,30 @@ function updatePlayerPhysics(dt) {
 
   p.throttle = damp(p.throttle, gas ? 1 : 0, 11, dt);
   p.brake = damp(p.brake, brake ? 1 : 0, 16, dt);
-  p.steer = damp(p.steer, controls.steer, 13, dt);
+  p.steer = damp(p.steer, controls.steer, HANDLING.steerResponse, dt);
 
   const speed0 = Math.hypot(p.vel.x, p.vel.z);
   const f0x = Math.sin(p.yaw), f0z = Math.cos(p.yaw);
   const vLong0 = p.vel.x * f0x + p.vel.z * f0z;
 
-  const maxSteer = lerp(0.52, 0.115, clamp(speed0 / 54, 0, 1));
+  const maxSteer = lerp(
+    HANDLING.steerLowSpeed,
+    HANDLING.steerHighSpeed,
+    clamp(speed0 / HANDLING.steerSpeedRef, 0, 1)
+  );
   const steerAngle = p.steer * maxSteer;
-  const gripAccel = p.offroad ? 12 : (handbrake ? 12 : 31);
-  const maxYaw = gripAccel / Math.max(5, speed0);
+  const gripAccel = p.offroad
+    ? HANDLING.gripOffroad
+    : handbrake
+      ? HANDLING.gripHandbrake
+      : p.onKerb
+        ? HANDLING.gripKerb
+        : HANDLING.gripTrack;
+  const maxYaw = gripAccel / Math.max(4, speed0);
   let yawTarget = (vLong0 / 3.05) * Math.tan(steerAngle);
   if (handbrake) yawTarget *= 1.55;
   yawTarget = clamp(yawTarget, -maxYaw, maxYaw);
-  p.yawRate = damp(p.yawRate, yawTarget, 10, dt);
+  p.yawRate = damp(p.yawRate, yawTarget, HANDLING.yawResponse, dt);
   p.yaw += p.yawRate * dt;
   p.yaw = ((p.yaw + Math.PI) % TAU + TAU) % TAU - Math.PI;
 
@@ -980,7 +1011,7 @@ function updatePlayerPhysics(dt) {
     const maxSpeed = drs ? 96 : 90;
     const ratio = clamp(vLong / maxSpeed, -1, 1);
     const engine = 18.5 * Math.max(0, 1 - ratio * ratio);
-    accel += engine * (p.offroad ? 0.36 : 1);
+    accel += engine * (p.offroad ? HANDLING.offroadPower : 1);
   }
   if (brake) {
     if (vLong > 0.35) accel -= 33 * p.brake;
@@ -988,14 +1019,20 @@ function updatePlayerPhysics(dt) {
   }
   if (handbrake) accel -= 9;
   const dragCoef = drs ? 0.000165 : 0.00022;
-  const drag = dragCoef * vLong * Math.abs(vLong) + 0.6 * Math.sign(vLong) + (p.offroad ? 7.5 : 0);
+  const drag = dragCoef * vLong * Math.abs(vLong) + 0.6 * Math.sign(vLong) + (p.offroad ? HANDLING.offroadDrag : 0);
   accel -= drag;
   vLong += accel * dt;
   if (vLong < -12) vLong = -12;
   if (!gas && !brake && !handbrake && Math.abs(vLong) < 0.2) vLong = 0;
 
-  const gripDamp = p.offroad ? 2.4 : (handbrake ? 1.7 : 10.5);
-  vLat *= Math.exp(-gripDamp * dt);
+  const sideGrip = p.offroad
+    ? HANDLING.sideGripOffroad
+    : handbrake
+      ? HANDLING.sideGripHandbrake
+      : p.onKerb
+        ? HANDLING.sideGripKerb
+        : HANDLING.sideGripTrack;
+  vLat *= Math.exp(-sideGrip * dt);
 
   p.vLong = vLong;
   p.vLat = vLat;
@@ -1033,7 +1070,11 @@ function updatePlayerVisual(dt) {
   car.body.rotation.x = damp(car.body.rotation.x, clamp(-longAccel * 0.0022, -0.055, 0.055), 7, dt);
   car.body.rotation.z = damp(car.body.rotation.z, clamp(p.vLong * p.yawRate * 0.0032, -0.07, 0.07), 7, dt);
 
-  const steerVisual = p.steer * lerp(0.48, 0.16, clamp(Math.abs(p.vLong) / 55, 0, 1));
+  const steerVisual = p.steer * lerp(
+    HANDLING.steerLowSpeed * 0.82,
+    HANDLING.steerHighSpeed * 1.2,
+    clamp(Math.abs(p.vLong) / HANDLING.steerSpeedRef, 0, 1)
+  );
   for (const w of car.wheels) {
     w.spin.rotation.x += (p.vLong / w.radius) * dt;
     if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, steerVisual, 18, dt);
