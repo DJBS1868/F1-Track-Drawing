@@ -5,7 +5,7 @@ import { createCar, AI_TEAMS } from './car.js';
 import { createRaceWorld, createShowroom } from './world.js';
 import { audio } from './audio.js';
 import {
-  clamp, lerp, damp, smoothstep, formatTime, formatShortTime, TAU
+  clamp, lerp, damp, dampAngle, smoothstep, formatTime, formatShortTime, TAU
 } from './utils.js';
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -662,6 +662,9 @@ function enterRace(trackData) {
     cameraReady: false,
     cameraMode: 0,
     camLook: new THREE.Vector3(),
+    camSmooth: new THREE.Vector3(),
+    camYaw: 0,
+    shakeT: 0,
     leaderTimer: 0,
     player: {
       pos: { x: 0, z: 0 }, vel: { x: 0, z: 0 }, yaw: 0, steer: 0, throttle: 0, brake: 0,
@@ -713,6 +716,9 @@ function resetRaceState() {
   p.assistState = 'auto';
   p.sNorm = ((r.locator.nearest(pose.x, pose.z).index % r.track.N) / r.track.N);
   p.prevS = p.sNorm;
+  r.camYaw = pose.yaw;
+  r.shakeT = 0;
+  r.impactShake = 0;
   setCarPose(r.playerCar, pose.x, pose.z, pose.yaw);
   r.playerCar.body.rotation.set(0, 0, 0);
   r.playerCar.setDRS(false);
@@ -1183,6 +1189,11 @@ function recoverPlayer(showToast = true) {
   p.sNorm = (near.index % race.track.N) / race.track.N;
   p.prevS = p.sNorm;
   race.locator.lastIndex = near.index;
+  // Cut the camera with the car rather than letting it swoop across the
+  // circuit to the recovery point.
+  race.camYaw = p.yaw;
+  race.cameraReady = false;
+  race.camLook.set(s.x + Math.sin(p.yaw) * 7, 0.92, s.z + Math.cos(p.yaw) * 7);
   race.smoke.reset();
   if (showToast) {
     toast('Recovered to the racing line');
@@ -1510,27 +1521,39 @@ function updateRaceCamera(dt) {
   if (!race) return;
   const p = race.player;
   const carPos = camVecA.set(p.pos.x, 0, p.pos.z);
-  const fx = Math.sin(p.yaw), fz = Math.cos(p.yaw);
-  const rx = Math.cos(p.yaw), rz = -Math.sin(p.yaw);
   const speed = Math.hypot(p.vel.x, p.vel.z);
+  const speedT = clamp(speed / 90, 0, 1);
   let fov = 58;
 
-  const chaseBack = 7.6 + speed * 0.04;
-  const chaseHeight = 2.55 + speed * 0.016;
+  // Ease the camera heading instead of locking it to the car's instantaneous
+  // yaw. Small steering corrections then glide past the lens instead of
+  // twitching it, and the car stays planted in frame.
+  if (!Number.isFinite(race.camYaw)) race.camYaw = p.yaw;
+  const yawLambda = race.state === 'countdown' ? 3.2 : 8.5;
+  race.camYaw = dampAngle(race.camYaw, p.yaw, yawLambda, dt);
+  const fx = Math.sin(race.camYaw), fz = Math.cos(race.camYaw);
+  const rx = Math.cos(race.camYaw), rz = -Math.sin(race.camYaw);
+  // Onboard view is bolted to the real car heading.
+  const cfx = Math.sin(p.yaw), cfz = Math.cos(p.yaw);
+
+  const chaseBack = 7.1 + speedT * 3.4;
+  const chaseHeight = 2.42 + speedT * 1.1;
   const chasePos = camVecB.set(
-    carPos.x - fx * chaseBack + rx * 0.25,
+    carPos.x - fx * chaseBack + rx * 0.18,
     chaseHeight,
-    carPos.z - fz * chaseBack + rz * 0.25
+    carPos.z - fz * chaseBack + rz * 0.18
   );
+  const lookAhead = 7 + speedT * 6;
   const chaseLook = camVecC.set(
-    carPos.x + fx * (7 + speed * 0.11),
-    0.9,
-    carPos.z + fz * (7 + speed * 0.11)
+    carPos.x + fx * lookAhead,
+    0.92,
+    carPos.z + fz * lookAhead
   );
-  fov = 58 + clamp(speed * 0.18, 0, 15);
+  fov = 58 + speedT * 14;
 
   let desired = chasePos;
   let look = chaseLook;
+  let rigid = false;
 
   if (race.cameraMode === 1) {
     desired = camVecB.set(
@@ -1541,13 +1564,15 @@ function updateRaceCamera(dt) {
     look = camVecC.set(carPos.x + fx * 14, 1.0, carPos.z + fz * 14);
     fov = 48;
   } else if (race.cameraMode === 2) {
+    // Cockpit: rigidly attached, no smoothing lag at all.
     desired = camVecB.set(
-      carPos.x + fx * 0.3 + rx * 0.02,
-      1.18,
-      carPos.z + fz * 0.3 + rz * 0.02
+      carPos.x + cfx * 0.34 + Math.cos(p.yaw) * 0.02,
+      1.16,
+      carPos.z + cfz * 0.34 - Math.sin(p.yaw) * 0.02
     );
-    look = camVecC.set(carPos.x + fx * 34, 0.85, carPos.z + fz * 34);
-    fov = 74;
+    look = camVecC.set(carPos.x + cfx * 34, 0.82, carPos.z + cfz * 34);
+    fov = 76;
+    rigid = true;
   }
 
   if (race.state === 'countdown') {
@@ -1561,6 +1586,7 @@ function updateRaceCamera(dt) {
     desired = introPos.clone().lerp(chasePos, k);
     look = introLook.clone().lerp(chaseLook, k);
     fov = lerp(52, 60, k);
+    rigid = false;
   }
 
   if (race.state === 'finished') {
@@ -1569,32 +1595,43 @@ function updateRaceCamera(dt) {
     desired = camVecB.set(carPos.x + Math.cos(a) * 9.5, 3.4 + Math.sin(a * 0.7) * 0.6, carPos.z + Math.sin(a) * 9.5);
     look = camVecC.set(carPos.x, 0.8, carPos.z);
     fov = 44;
+    rigid = false;
   }
 
   if (!race.cameraReady) {
-    race.camera.position.copy(desired);
+    race.camSmooth.copy(desired);
     race.camLook.copy(look);
     race.camera.fov = fov;
-    race.camera.updateProjectionMatrix();
     race.cameraReady = true;
+  } else if (rigid) {
+    race.camSmooth.copy(desired);
+    race.camLook.copy(look);
+    race.camera.fov = fov;
   } else {
-    const posLambda = race.state === 'countdown' ? 4.8 : 10.5 + speed * 0.22;
-    race.camera.position.lerp(desired, 1 - Math.exp(-posLambda * dt));
-    race.camLook.lerp(look, 1 - Math.exp(-12 * dt));
-    const nextFov = damp(race.camera.fov, fov, 4, dt);
-    if (Math.abs(nextFov - race.camera.fov) > 0.01) {
-      race.camera.fov = nextFov;
-      race.camera.updateProjectionMatrix();
-    }
+    // The heading is already smoothed, so a firm spring keeps the camera
+    // glued to the car without wobbling or overshooting.
+    const posLambda = race.state === 'countdown' ? 4.8 : 15 + speedT * 9;
+    race.camSmooth.lerp(desired, 1 - Math.exp(-posLambda * dt));
+    race.camLook.lerp(look, 1 - Math.exp(-20 * dt));
+    race.camera.fov = damp(race.camera.fov, fov, 5, dt);
   }
+  race.camera.updateProjectionMatrix();
+  race.camera.position.copy(race.camSmooth);
 
   const impactKick = race.impactShake || 0;
   race.impactShake = impactKick * Math.exp(-7 * dt);
-  const shake = (p.onKerb ? 0.035 : 0) + (p.offroad ? 0.07 : 0) + impactKick + clamp(speed / 90, 0, 1) * 0.012;
+  const shake = ((p.onKerb ? 0.028 : 0) + (p.offroad ? 0.055 : 0) + impactKick + speedT * 0.006) *
+    (rigid ? 0.35 : 1);
   if (shake > 0.001 && race.state !== 'paused') {
-    race.camera.position.x += (Math.random() - 0.5) * shake;
-    race.camera.position.y += (Math.random() - 0.5) * shake * 0.7;
-    race.camera.position.z += (Math.random() - 0.5) * shake;
+    // Smooth pseudo-noise instead of per-frame random: a rumble, not a glitch.
+    race.shakeT = (race.shakeT || 0) + dt;
+    const s = race.shakeT;
+    const sx = Math.sin(s * 43.7) * 0.55 + Math.sin(s * 19.3 + 1.1) * 0.45;
+    const sy = Math.sin(s * 37.1 + 2.3) * 0.6 + Math.sin(s * 26.9) * 0.4;
+    const sz = Math.sin(s * 51.3 + 0.7) * 0.5 + Math.sin(s * 15.7 + 3.1) * 0.5;
+    race.camera.position.x += sx * shake;
+    race.camera.position.y += sy * shake * 0.65;
+    race.camera.position.z += sz * shake;
   }
   race.camera.lookAt(race.camLook);
 }
@@ -1915,7 +1952,6 @@ function wireTouchControls() {
 /* ═══════════════════════════════════════════════════════════════════
    Events
    ═══════════════════════════════════════════════════════════════════ */
-let exampleIndex = 0;
 
 function wireEvents() {
   dom.btnStart.addEventListener('click', startDrawing);
@@ -1927,8 +1963,8 @@ function wireEvents() {
   dom.btnUndo.addEventListener('click', () => { drawScreen.undo(); audio.click(480); });
   dom.btnExample.addEventListener('click', () => {
     audio.ensure();
-    exampleIndex = (exampleIndex + 1) % EXAMPLE_TRACKS.length;
-    drawScreen.loadExample(exampleIndex);
+    drawScreen.loadRandom();
+    audio.click(740);
   });
   dom.btnBuild.addEventListener('click', () => {
     const result = drawScreen.getResult();
@@ -2050,6 +2086,7 @@ async function boot() {
   window.__apex = {
     get state() { return appState; },
     get race() { return race; },
+    get drawScreen() { return drawScreen; },
     startDrawing,
     beginBuild,
     enterMenu,

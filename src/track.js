@@ -211,10 +211,22 @@ export function analyzePreview(rawPoints, opts = {}) {
       gap++;
       if (gap > 7) { inTurn = false; gap = 0; }
     }
-    if (!isTurn) {
-      straightRun += step;
-      straightBest = Math.max(straightBest, straightRun);
-    } else straightRun = 0;
+  }
+
+  // Measure the longest straight cyclically so a straight crossing the
+  // start/finish seam is not split in half.
+  let scan = 0;
+  while (scan < sampleCount && sm[scan] <= cornerThreshold) scan++;
+  if (scan >= sampleCount) {
+    straightBest = targetLength;
+  } else {
+    for (let k = 1; k <= sampleCount; k++) {
+      const i = (scan + k) % sampleCount;
+      if (sm[i] <= cornerThreshold) {
+        straightRun += step;
+        if (straightRun > straightBest) straightBest = straightRun;
+      } else straightRun = 0;
+    }
   }
 
   const closed = prepared.length > 3;
@@ -253,6 +265,242 @@ export function trackNameFor(points) {
   const b = NAME_B[(h >>> 5) % NAME_B.length];
   const c = NAME_C[(h >>> 11) % NAME_C.length];
   return { name: `${a} ${b}`, suffix: c, seed: h };
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Endless inspiration tracks
+   A random convex ring of 5-11 corners, with every corner filleted by a
+   random radius. That leaves genuine straights between real corners, so
+   the result reads as a circuit rather than a wobbly blob. A convex ring
+   and conservative fillets can never self-intersect.
+   Every roll is seeded from the clock, so the well is infinite.
+   ═══════════════════════════════════════════════════════════════════ */
+
+const recentTrackPrints = [];
+
+function trackFingerprint(prepared) {
+  const stride = Math.max(1, Math.floor(prepared.length / 24));
+  let print = '';
+  for (let i = 0; i < prepared.length; i += stride) {
+    print += `${Math.round(prepared[i].x / 10)},${Math.round(prepared[i].y / 10)};`;
+  }
+  return print;
+}
+
+const vSub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+const vCross = (a, b) => a.x * b.y - a.y * b.x;
+const vDist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const vUnit = (a) => {
+  const len = Math.hypot(a.x, a.y) || 1;
+  return { x: a.x / len, y: a.y / len };
+};
+
+function buildPolygonVertices(rng) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const count = 5 + Math.floor(rng() * 7);
+    const gaps = [];
+    let gapSum = 0;
+    for (let i = 0; i < count; i++) {
+      const gap = 0.5 + rng() * 1.6;
+      gaps.push(gap);
+      gapSum += gap;
+    }
+
+    // Stretch the ring so some circuits are wide and others are tall.
+    const stretchX = 0.85 + rng() * 0.35;
+    const stretchY = 0.85 + rng() * 0.35;
+    const start = rng() * TAU;
+    // Tighten the radius spread if the first rolls are not convex.
+    const spread = attempt < 16 ? 1 : attempt < 32 ? 0.65 : 0.35;
+    const verts = [];
+    let angle = start;
+    for (let i = 0; i < count; i++) {
+      angle += (gaps[i] / gapSum) * TAU;
+      const radius = 1 + (rng() * 2 - 1) * 0.27 * spread;
+      verts.push({
+        x: Math.cos(angle) * radius * stretchX,
+        y: Math.sin(angle) * radius * stretchY
+      });
+    }
+
+    let convex = true;
+    for (let i = 0; i < count; i++) {
+      const prev = verts[(i - 1 + count) % count];
+      const cur = verts[i];
+      const next = verts[(i + 1) % count];
+      if (vCross(vSub(cur, prev), vSub(next, cur)) <= 0.015) {
+        convex = false;
+        break;
+      }
+      const inA = vUnit(vSub(prev, cur));
+      const inB = vUnit(vSub(next, cur));
+      const interior = Math.acos(clamp(inA.x * inB.x + inA.y * inB.y, -1, 1));
+      if (interior < 0.22 || interior > 2.86) {
+        convex = false;
+        break;
+      }
+    }
+    if (convex) return verts;
+  }
+  return null;
+}
+
+function filletPolygon(verts, rng) {
+  const n = verts.length;
+  const corners = [];
+  for (let i = 0; i < n; i++) {
+    const a = verts[(i - 1 + n) % n];
+    const b = verts[i];
+    const c = verts[(i + 1) % n];
+    const uBA = vUnit(vSub(a, b));
+    const uBC = vUnit(vSub(c, b));
+    const interior = Math.acos(clamp(uBA.x * uBC.x + uBA.y * uBC.y, -1, 1));
+    const edge = Math.min(vDist(a, b), vDist(b, c));
+    // Sweepers get a slightly wider arc, tighter corners a small radius.
+    const frac = interior > 1.9 ? 0.032 + rng() * 0.05 : 0.022 + rng() * 0.04;
+    const tangent = edge * frac;
+    const radius = tangent * Math.tan(interior / 2);
+    const bisector = vUnit({ x: uBA.x + uBC.x, y: uBA.y + uBC.y });
+    const offset = radius / Math.sin(interior / 2);
+    const center = { x: b.x + bisector.x * offset, y: b.y + bisector.y * offset };
+    const p = { x: b.x + uBA.x * tangent, y: b.y + uBA.y * tangent };
+    const q = { x: b.x + uBC.x * tangent, y: b.y + uBC.y * tangent };
+    const aP = Math.atan2(p.y - center.y, p.x - center.x);
+    const aQ = Math.atan2(q.y - center.y, q.x - center.x);
+    let sweep = aQ - aP;
+    while (sweep > Math.PI) sweep -= TAU;
+    while (sweep < -Math.PI) sweep += TAU;
+    corners.push({ p, q, center, radius, aP, sweep });
+  }
+
+  let pts = [];
+  const straights = [];
+  const pushArc = (corner, includeStart) => {
+    const steps = Math.max(5, Math.ceil(Math.abs(corner.sweep) * corner.radius / 0.02));
+    for (let k = includeStart ? 0 : 1; k <= steps; k++) {
+      const ang = corner.aP + corner.sweep * (k / steps);
+      pts.push({
+        x: corner.center.x + Math.cos(ang) * corner.radius,
+        y: corner.center.y + Math.sin(ang) * corner.radius
+      });
+    }
+  };
+  const pushLine = (from, to, includeEnd = true) => {
+    const steps = Math.max(2, Math.ceil(vDist(from, to) / 0.03));
+    const last = includeEnd ? steps : steps - 1;
+    const startIdx = pts.length;
+    for (let k = 1; k <= last; k++) {
+      const t = k / steps;
+      pts.push({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
+    }
+    if (pts.length > startIdx) {
+      straights.push({ start: startIdx, end: pts.length, length: vDist(from, to) });
+    }
+  };
+
+  // Start on the entry tangent of the first corner; close the loop last.
+  pushArc(corners[0], true);
+  for (let i = 1; i < n; i++) {
+    pushLine(corners[i - 1].q, corners[i].p);
+    pushArc(corners[i], false);
+  }
+  pushLine(corners[n - 1].q, corners[0].p, false);
+
+  // Put the start/finish line halfway down the longest straight.
+  let best = straights[0];
+  for (const s of straights) if (s.length > best.length) best = s;
+  if (best) {
+    const mid = best.start + Math.floor((best.end - best.start) / 2);
+    if (mid > 0) pts = pts.slice(mid).concat(pts.slice(0, mid));
+  }
+  return pts;
+}
+
+function polygonLoop(rng) {
+  const verts = buildPolygonVertices(rng);
+  return verts ? filletPolygon(verts, rng) : null;
+}
+
+function fitToCanvas(unitPts, width, height) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of unitPts) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const pad = Math.min(width, height) * 0.075;
+  const scale = Math.min((width - pad * 2) / (maxX - minX), (height - pad * 2) / (maxY - minY));
+  const offX = (width - (maxX - minX) * scale) / 2 - minX * scale;
+  const offY = (height - (maxY - minY) * scale) / 2 - minY * scale;
+  return unitPts.map((p) => ({ x: p.x * scale + offX, y: p.y * scale + offY }));
+}
+
+export function generateRandomTrack(width = 960, height = 540, seed = 0) {
+  const safeW = Math.max(240, width);
+  const safeH = Math.max(180, height);
+  const baseSeed = (seed >>> 0) || ((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0);
+  let fallback = null;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const attemptSeed = (baseSeed + Math.imul(attempt, 0x9e3779b9)) >>> 0;
+    const rng = mulberry32(attemptSeed);
+    const loop = polygonLoop(rng);
+    if (!loop) continue;
+    const points = fitToCanvas(loop, safeW, safeH);
+    const preview = analyzePreview(points, { targetLength: 1900 });
+    if (preview.valid && !fallback) fallback = { points, preview };
+
+    if (!preview.valid) continue;
+    if (preview.turns < 4 || preview.turns > 18) continue;
+    if (preview.minRadius > 0 && preview.minRadius < 16) continue;
+    if (recentTrackPrints.includes(trackFingerprint(preview.prepared))) continue;
+
+    recentTrackPrints.push(trackFingerprint(preview.prepared));
+    if (recentTrackPrints.length > 30) recentTrackPrints.shift();
+    const named = trackNameFor(points);
+    // Report the corner/straight numbers the built circuit will actually
+    // have, not the cheaper preview estimate.
+    const data = createTrackData(points, { targetLength: 1900 });
+    if (data.valid) {
+      preview.turns = data.turns;
+      preview.longestStraight = data.longestStraight;
+    }
+    return {
+      points,
+      name: named.name,
+      suffix: named.suffix,
+      seed: named.seed,
+      generatedSeed: attemptSeed,
+      preview
+    };
+  }
+
+  // Last resort: the first valid roll is still a unique, closed circuit
+  // even when it missed a quality gate, so use it rather than an oval that
+  // would look identical on every click.
+  let pts = fallback?.points ?? null;
+  if (!pts) {
+    const rng = mulberry32((baseSeed ^ 0x7f4a7c15) >>> 0);
+    const count = 6 + Math.floor(rng() * 3);
+    const rot = rng() * TAU;
+    const sx = 0.88 + rng() * 0.24;
+    const sy = 0.88 + rng() * 0.24;
+    const verts = [];
+    for (let i = 0; i < count; i++) {
+      const a = rot + (i / count) * TAU;
+      verts.push({ x: Math.cos(a) * sx, y: Math.sin(a) * sy });
+    }
+    pts = fitToCanvas(filletPolygon(verts, rng), safeW, safeH);
+  }
+  const preview = pts === fallback?.points ? fallback.preview : analyzePreview(pts);
+  const data = createTrackData(pts, { targetLength: 1900 });
+  if (data.valid) {
+    preview.turns = data.turns;
+    preview.longestStraight = data.longestStraight;
+  }
+  recentTrackPrints.push(trackFingerprint(preview.prepared));
+  if (recentTrackPrints.length > 30) recentTrackPrints.shift();
+  const named = trackNameFor(pts);
+  return { points: pts, name: named.name, suffix: named.suffix, seed: named.seed, preview };
 }
 
 export function createTrackData(rawPoints, opts = {}) {
@@ -335,8 +583,8 @@ export function createTrackData(rawPoints, opts = {}) {
   let inTurn = false;
   let gap = 0;
   let turns = 0;
-  for (let i = 0; i < N * 2; i++) {
-    const idx = i % N;
+  for (let i = 0; i < N; i++) {
+    const idx = i;
     const isTurn = Math.abs(K[idx]) > cornerThreshold;
     if (isTurn) {
       if (!inTurn) turns++;
@@ -357,12 +605,17 @@ export function createTrackData(rawPoints, opts = {}) {
   }
 
   let straightBest = 0;
-  let straightRun = 0;
-  for (let i = 0; i < N; i++) {
-    if (Math.abs(K[i]) < 1 / 260) {
-      straightRun += step;
-      straightBest = Math.max(straightBest, straightRun);
-    } else straightRun = 0;
+  let straightStart = 0;
+  while (straightStart < N && Math.abs(K[straightStart]) >= 1 / 260) straightStart++;
+  if (straightStart < N) {
+    let straightRun = 0;
+    for (let k = 1; k <= N; k++) {
+      const i = (straightStart + k) % N;
+      if (Math.abs(K[i]) < 1 / 260) {
+        straightRun += step;
+        if (straightRun > straightBest) straightBest = straightRun;
+      } else straightRun = 0;
+    }
   }
 
   // AI speed profile

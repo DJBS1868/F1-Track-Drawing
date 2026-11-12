@@ -125,44 +125,131 @@ export class AudioEngine {
     return buffer;
   }
 
+  // Short exhaust pop / overrun crackle.
+  _crackle(when, power = 0.6) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this._crackleBuffer) this._crackleBuffer = this._noiseBuffer(0.25);
+    const dur = 0.035 + Math.random() * 0.05;
+    const src = ctx.createBufferSource();
+    src.buffer = this._crackleBuffer;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 800 + Math.random() * 2800;
+    bp.Q.value = 0.7 + Math.random() * 1.6;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(0.05 * power, when + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.raceBus);
+    src.start(when, Math.random() * 0.1);
+    src.stop(when + dur + 0.02);
+  }
+
   startRace() {
     const ctx = this.ensure();
     if (!ctx || this.running) return;
     this.running = true;
     const now = ctx.currentTime;
 
+    // Everything on the car routes through one bus so pause silences the lot.
+    this.raceBus = ctx.createGain();
+    this.raceBus.gain.setValueAtTime(0.0001, now);
+    this.raceBus.gain.exponentialRampToValueAtTime(1, now + 0.4);
+    this.raceBus.connect(this.master);
+
+    // ── engine core ────────────────────────────────────────────────
+    // A V6 four-stroke fires three times per crank revolution: at 15,000 rpm
+    // that is a 750 Hz fundamental, rich with harmonics. That high, hard
+    // buzz is what makes an F1 car sound like an F1 car.
     this.engineGain = ctx.createGain();
     this.engineGain.gain.setValueAtTime(0.0001, now);
-    this.engineGain.gain.exponentialRampToValueAtTime(0.07, now + 0.5);
+    this.engineGain.gain.exponentialRampToValueAtTime(0.085, now + 0.55);
+    this.engineGain.connect(this.raceBus);
 
     this.engineFilter = ctx.createBiquadFilter();
     this.engineFilter.type = 'lowpass';
-    this.engineFilter.frequency.value = 700;
-    this.engineFilter.Q.value = 1.5;
+    this.engineFilter.frequency.value = 1200;
+    this.engineFilter.Q.value = 1.15;
 
-    this.oscA = ctx.createOscillator();
-    this.oscA.type = 'sawtooth';
-    this.oscA.frequency.value = 62;
-    this.oscB = ctx.createOscillator();
-    this.oscB.type = 'square';
-    this.oscB.frequency.value = 31;
-    this.oscC = ctx.createOscillator();
-    this.oscC.type = 'sawtooth';
-    this.oscC.frequency.value = 124;
-    const gC = ctx.createGain();
-    gC.gain.value = 0.18;
+    // Resonant exhaust peak adds the metallic snarl on top of the buzz.
+    this.exhaustFilter = ctx.createBiquadFilter();
+    this.exhaustFilter.type = 'peaking';
+    this.exhaustFilter.frequency.value = 2400;
+    this.exhaustFilter.Q.value = 0.85;
+    this.exhaustFilter.gain.value = 5;
 
-    this.oscA.connect(this.engineFilter);
-    this.oscB.connect(this.engineFilter);
-    this.oscC.connect(gC);
-    gC.connect(this.engineFilter);
-    this.engineFilter.connect(this.engineGain);
-    this.engineGain.connect(this.master);
-    this.oscA.start(now);
-    this.oscB.start(now);
-    this.oscC.start(now);
+    this.raspShaper = ctx.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) {
+      const x = (i / 1023) * 2 - 1;
+      curve[i] = Math.tanh(x * 2.3) * 0.82;
+    }
+    this.raspShaper.curve = curve;
+    this.raspShaper.oversample = '2x';
 
-    // tyre noise
+    const mix = ctx.createGain();
+    mix.gain.value = 0.5;
+    this.engineFilter.connect(mix);
+    mix.connect(this.exhaustFilter);
+    this.exhaustFilter.connect(this.raspShaper);
+    this.raspShaper.connect(this.engineGain);
+
+    const addOsc = (type, freq, gain) => {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.value = gain;
+      o.connect(g);
+      g.connect(this.engineFilter);
+      o.start(now);
+      return o;
+    };
+    this.oscA = addOsc('sawtooth', 225, 0.55);   // firing frequency
+    this.oscB = addOsc('sawtooth', 226.4, 0.4);  // detuned twin, gives bite
+    this.oscC = addOsc('square', 112.5, 0.13);   // half-order body
+    this.oscD = addOsc('sawtooth', 450, 0.2);    // upper harmonic scream
+    this.oscE = addOsc('sine', 56, 0.18);        // sub thump
+
+    // ── turbo / MGU-H whine ────────────────────────────────────────
+    this.turboGain = ctx.createGain();
+    this.turboGain.gain.value = 0.0001;
+    this.turboGain.connect(this.raceBus);
+    this.turboOsc = ctx.createOscillator();
+    this.turboOsc.type = 'sine';
+    this.turboOsc.frequency.value = 2600;
+    this.turboOsc.connect(this.turboGain);
+    this.turboOsc.start(now);
+    const turbo2Gain = ctx.createGain();
+    turbo2Gain.gain.value = 0.35;
+    this.turboOsc2 = ctx.createOscillator();
+    this.turboOsc2.type = 'triangle';
+    this.turboOsc2.frequency.value = 3900;
+    this.turboOsc2.connect(turbo2Gain);
+    turbo2Gain.connect(this.turboGain);
+    this.turboOsc2.start(now);
+
+    // ── intake roar ────────────────────────────────────────────────
+    this.intakeGain = ctx.createGain();
+    this.intakeGain.gain.value = 0.0001;
+    this.intakeGain.connect(this.raceBus);
+    const intakeSrc = ctx.createBufferSource();
+    intakeSrc.buffer = this._noiseBuffer(2);
+    intakeSrc.loop = true;
+    const intakeFilter = ctx.createBiquadFilter();
+    intakeFilter.type = 'bandpass';
+    intakeFilter.frequency.value = 1100;
+    intakeFilter.Q.value = 0.6;
+    intakeSrc.connect(intakeFilter);
+    intakeFilter.connect(this.intakeGain);
+    intakeSrc.start(now);
+    this.intakeSrc = intakeSrc;
+    this.intakeFilter = intakeFilter;
+
+    // ── tyre noise ─────────────────────────────────────────────────
     this.tyreGain = ctx.createGain();
     this.tyreGain.gain.value = 0.0001;
     const tyreSrc = ctx.createBufferSource();
@@ -174,10 +261,10 @@ export class AudioEngine {
     tyreFilter.Q.value = 1.2;
     tyreSrc.connect(tyreFilter);
     tyreFilter.connect(this.tyreGain);
-    this.tyreGain.connect(this.master);
+    this.tyreGain.connect(this.raceBus);
     tyreSrc.start(now);
 
-    // wind noise
+    // ── wind rush ──────────────────────────────────────────────────
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0.0001;
     const windSrc = ctx.createBufferSource();
@@ -188,56 +275,106 @@ export class AudioEngine {
     windFilter.frequency.value = 900;
     windSrc.connect(windFilter);
     windFilter.connect(this.windGain);
-    this.windGain.connect(this.master);
+    this.windGain.connect(this.raceBus);
     windSrc.start(now);
 
     this.tyreSrc = tyreSrc;
     this.windSrc = windSrc;
+
+    // gear / rpm memory for shifts and overrun pops
+    this.lastGear = 0;
+    this.lastRpm = 0.3;
+    this.lastThrottle = 0;
+    this.crackleCooldown = 0;
+    this.shiftUntil = 0;
   }
 
   stopRace() {
     if (!this.ctx || !this.running) return;
     const t = this.ctx.currentTime;
-    this.engineGain?.gain.cancelScheduledValues(t);
-    this.engineGain?.gain.linearRampToValueAtTime(0.0001, t + 0.4);
-    this.tyreGain?.gain.linearRampToValueAtTime(0.0001, t + 0.3);
-    this.windGain?.gain.linearRampToValueAtTime(0.0001, t + 0.3);
-    const oscs = [this.oscA, this.oscB, this.oscC];
-    oscs.forEach((o) => { try { o.stop(t + 0.5); } catch {} });
-    [this.tyreSrc, this.windSrc].forEach((s) => { try { s.stop(t + 0.5); } catch {} });
+    this.raceBus?.gain.cancelScheduledValues(t);
+    this.raceBus?.gain.linearRampToValueAtTime(0.0001, t + 0.4);
+    const oscs = [this.oscA, this.oscB, this.oscC, this.oscD, this.oscE, this.turboOsc, this.turboOsc2];
+    oscs.forEach((o) => { try { o?.stop(t + 0.5); } catch {} });
+    [this.tyreSrc, this.windSrc, this.intakeSrc].forEach((s) => { try { s?.stop(t + 0.5); } catch {} });
     this.running = false;
-    this.oscA = this.oscB = this.oscC = null;
-    this.tyreSrc = this.windSrc = null;
+    this.oscA = this.oscB = this.oscC = this.oscD = this.oscE = null;
+    this.turboOsc = this.turboOsc2 = null;
+    this.tyreSrc = this.windSrc = this.intakeSrc = null;
   }
 
   setPaused(paused) {
-    if (!this.ctx || !this.engineGain) return;
+    if (!this.ctx || !this.raceBus) return;
     const t = this.ctx.currentTime;
-    const level = paused ? 0.0001 : 0.07;
-    this.engineGain.gain.setTargetAtTime(level, t, 0.08);
+    this.raceBus.gain.cancelScheduledValues(t);
+    this.raceBus.gain.setTargetAtTime(paused ? 0.0001 : 1, t, 0.06);
   }
 
   update({ speed = 0, throttle = 0, brake = 0, slip = 0, offroad = false, running = true }) {
     if (!this.ctx || !this.engineGain || !this.running) return;
     const t = this.ctx.currentTime;
     const kmh = speed * 3.6;
-    const gearPos = Math.min(7, Math.floor(kmh / 42));
-    const gearFrac = (kmh % 42) / 42;
-    const target = 46 + gearFrac * 72 + (throttle * 18) + speed * 0.32;
-    const smooth = this.lastSpeed + (target - this.lastSpeed) * 0.08;
-    this.lastSpeed = smooth;
-    this.oscA.frequency.setTargetAtTime(smooth, t, 0.045);
-    this.oscB.frequency.setTargetAtTime(smooth * 0.5, t, 0.05);
-    this.oscC.frequency.setTargetAtTime(smooth * 2.02, t, 0.04);
-    this.engineFilter.frequency.setTargetAtTime(380 + speed * 26 + throttle * 800, t, 0.08);
-    const load = 0.045 + throttle * 0.035 + speed * 0.0003;
-    this.engineGain.gain.setTargetAtTime(running ? load : 0.0001, t, 0.09);
-    this.tyreGain.gain.setTargetAtTime(Math.min(0.055, slip * 0.014 + (brake > 0.5 ? slip * 0.01 : 0)), t, 0.06);
-    this.windGain.gain.setTargetAtTime(Math.min(0.03, speed * 0.00028), t, 0.15);
-    if (offroad) {
-      this.tyreGain.gain.setTargetAtTime(0.02 + speed * 0.0003, t, 0.05);
+
+    // Eight-speed gearbox: the note climbs through each gear and snaps back
+    // on the upshift, just like a real onboard.
+    const gearTops = [70, 115, 158, 200, 242, 280, 316, 360];
+    let gear = 0;
+    while (gear < gearTops.length - 1 && kmh > gearTops[gear]) gear++;
+    const gearLo = gear === 0 ? 0 : gearTops[gear - 1];
+    const gearFrac = Math.min(1, Math.max(0, (kmh - gearLo) / (gearTops[gear] - gearLo)));
+    let rpm = kmh < 1.5 ? 0.3 : 0.3 + gearFrac * 0.7;
+    rpm = Math.min(1.02, rpm + throttle * 0.025);
+
+    const prevGear = this.lastGear;
+    this.lastGear = gear;
+    const prevThrottle = this.lastThrottle;
+    this.lastThrottle = throttle;
+
+    if (gear !== prevGear && prevGear !== 0 && kmh > 20) {
+      this.shiftUntil = t + 0.1;
+      this._crackle(t + 0.01, 0.9);
     }
-    void gearPos;
+
+    // Overrun: off-throttle at revs spits unburnt fuel out of the exhaust.
+    if (prevThrottle > 0.3 && throttle < 0.12 && rpm > 0.4 && t > this.crackleCooldown) {
+      this.crackleCooldown = t + 0.12 + Math.random() * 0.28;
+      const pops = 1 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < pops; i++) {
+        this._crackle(t + 0.02 + Math.random() * 0.09, 0.35 + Math.random() * 0.6);
+      }
+    }
+    this.crackleCooldown = Math.max(0, this.crackleCooldown);
+
+    // 750 Hz at 15,000 rpm — the classic F1 firing frequency.
+    const f = rpm * 750;
+    this.oscA.frequency.setTargetAtTime(f, t, 0.03);
+    this.oscB.frequency.setTargetAtTime(f * 1.006 + 1.7, t, 0.03);
+    this.oscC.frequency.setTargetAtTime(f * 0.5, t, 0.03);
+    this.oscD.frequency.setTargetAtTime(f * 2.005, t, 0.03);
+    this.oscE.frequency.setTargetAtTime(f * 0.25 + 18, t, 0.03);
+
+    // Brightness and snarl track revs and throttle.
+    this.engineFilter.frequency.setTargetAtTime(750 + rpm * 3900 + throttle * 950, t, 0.06);
+    this.exhaustFilter.frequency.setTargetAtTime(1500 + rpm * 1900, t, 0.08);
+    this.exhaustFilter.gain.setTargetAtTime(3.5 + throttle * 4.5, t, 0.1);
+
+    const shifting = this.shiftUntil > t;
+    const level = 0.05 + throttle * 0.05 + rpm * 0.025;
+    this.engineGain.gain.setTargetAtTime(shifting ? level * 0.7 : level, t, 0.035);
+
+    // Turbo whistle rises with revs and boost.
+    const turboF = 1500 + rpm * 2900 + throttle * 280;
+    this.turboOsc.frequency.setTargetAtTime(turboF, t, 0.08);
+    this.turboOsc2.frequency.setTargetAtTime(turboF * 1.51, t, 0.08);
+    this.turboGain.gain.setTargetAtTime(0.0015 + throttle * 0.007 * rpm + Math.max(0, rpm - 0.3) * 0.003, t, 0.1);
+
+    // Intake roar builds with throttle.
+    this.intakeFilter.frequency.setTargetAtTime(800 + rpm * 1500, t, 0.1);
+    this.intakeGain.gain.setTargetAtTime(0.002 + throttle * 0.013 + rpm * 0.003, t, 0.08);
+
+    const tyreLevel = Math.min(0.06, slip * 0.012 + (brake > 0.5 ? slip * 0.009 : 0));
+    this.tyreGain.gain.setTargetAtTime(offroad ? 0.02 + speed * 0.0003 : tyreLevel, t, 0.06);
+    this.windGain.gain.setTargetAtTime(Math.min(0.03, speed * 0.00028), t, 0.15);
   }
 }
 

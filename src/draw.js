@@ -1,4 +1,4 @@
-import { analyzePreview } from './track.js';
+import { analyzePreview, generateRandomTrack } from './track.js';
 import { clamp } from './utils.js';
 
 export const EXAMPLE_TRACKS = [
@@ -143,12 +143,24 @@ export class DrawScreen {
     const pad = Math.min(this.width, this.height) * 0.09;
     const w = this.width - pad * 2;
     const h = this.height - pad * 2;
+    const points = ex.points.map(([x, y]) => ({ x: pad + x * w, y: pad + y * h }));
+    this._loadInspiration(points, ex.name);
+  }
+
+  // Endless inspiration: a brand new, always-valid circuit every click.
+  loadRandom() {
+    const generated = generateRandomTrack(this.width, this.height);
+    this._loadInspiration(generated.points, `${generated.name} · ${generated.suffix}`);
+    return generated;
+  }
+
+  _loadInspiration(points, label) {
     this.reset();
-    this.examplePoints = ex.points.map(([x, y]) => ({ x: pad + x * w, y: pad + y * h }));
+    this.examplePoints = points.map((p) => ({ ...p }));
     this.exampleProgress = 0;
     this.exampleAnimating = true;
     this.stage.classList.add('has-line');
-    this.cb.onNotice?.(`Loading ${ex.name}…`);
+    this.cb.onNotice?.(`Loading ${label}…`);
   }
 
   finishExample() {
