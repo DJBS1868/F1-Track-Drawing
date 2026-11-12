@@ -206,15 +206,22 @@
   <!-- ══════════════════════ RACE HUD ══════════════════════ -->
   <div id="race-hud" class="is-hidden">
     <div class="hud-top">
-      <div class="hud-position">
-        <div class="pos-big"><span id="hud-position">4</span><sup id="hud-position-total">/4</sup></div>
-        <div class="pos-meta">
-          <span class="mono">POSITION</span>
-          <strong id="hud-lap">LAP 1<em>/3</em></strong>
+      <div class="hud-left">
+        <div class="hud-position">
+          <div class="pos-big"><span id="hud-position">4</span><sup id="hud-position-total">/4</sup></div>
+          <div class="pos-meta">
+            <span class="mono">POSITION</span>
+            <strong id="hud-lap">LAP 1<em>/3</em></strong>
+          </div>
+        </div>
+
+        <div class="leaderboard" id="leaderboard" aria-label="Live race standings">
+          <div class="lb-head">
+            <span>POS</span><span class="lb-col-head"></span><span>DRIVER</span><span class="lb-gap-head">GAP</span>
+          </div>
+          <div class="lb-rows" id="leaderboard-rows"></div>
         </div>
       </div>
-
-      <div class="leaderboard" id="leaderboard"></div>
 
       <div class="hud-timing">
         <div class="timing-main"><span class="mono">RACE TIME</span><strong id="hud-time">0:00.000</strong></div>

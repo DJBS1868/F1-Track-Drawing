@@ -30,7 +30,8 @@ const dom = {
   btnBuild: $('btn-build'), btnExample: $('btn-example'), btnClear: $('btn-clear'), btnUndo: $('btn-undo'),
   btnBackMenu: $('btn-back-menu'),
   hudPosition: $('hud-position'), hudPositionTotal: $('hud-position-total'), hudLap: $('hud-lap'),
-  leaderboard: $('leaderboard'), hudTime: $('hud-time'), hudLast: $('hud-last'), hudBest: $('hud-best'),
+  leaderboardRows: $('leaderboard-rows'),
+  hudTime: $('hud-time'), hudLast: $('hud-last'), hudBest: $('hud-best'),
   btnPause: $('btn-pause'),
   hudSpeed: $('hud-speed'), hudGear: $('hud-gear'), speedoFill: $('speedo-fill'),
   speedoTicks: $('speedo-ticks'), throttleFill: $('throttle-fill'),
@@ -636,6 +637,7 @@ function enterRace(trackData) {
       speed: 0,
       finished: false,
       finishTime: null,
+      history: [],
       phase: Math.random() * TAU,
       lateral: i % 2 === 0 ? 2.9 : -2.9,
       baseLateral: i % 2 === 0 ? 2.9 : -2.9
@@ -671,7 +673,7 @@ function enterRace(trackData) {
       vLong: 0, vLat: 0, prevVLong: 0, yawRate: 0, offroad: false, offTimer: 0,
       lapsCompleted: 0, lapStart: 0, prevS: 0, sNorm: 0, sectors: [false, false, false],
       bestLap: null, lastLap: null, topSpeed: 0, finished: false, finishTime: null,
-      finishPosition: 4, drs: false, trackDist: 0, assistState: 'auto'
+      finishPosition: 4, drs: false, trackDist: 0, assistState: 'auto', history: []
     }
   };
 
@@ -714,6 +716,7 @@ function resetRaceState() {
   p.finished = false; p.finishTime = null; p.finishPosition = 4;
   p.drs = false; p.trackDist = 0;
   p.assistState = 'auto';
+  p.history = [];
   p.sNorm = ((r.locator.nearest(pose.x, pose.z).index % r.track.N) / r.track.N);
   p.prevS = p.sNorm;
   r.camYaw = pose.yaw;
@@ -730,6 +733,7 @@ function resetRaceState() {
     a.speed = 0;
     a.finished = false;
     a.finishTime = null;
+    a.history = [];
     a.lateral = i % 2 === 0 ? 2.9 : -2.9;
     a.baseLateral = a.lateral;
     a.phase = Math.random() * TAU;
@@ -747,6 +751,7 @@ function resetRaceState() {
   r.cameraReady = false;
   r.cameraMode = 0;
   r.leaderTimer = 0;
+  r.gapShown = {};
   r.state = 'countdown';
   r.world.setStartLights(0);
   r.smoke.reset();
@@ -912,22 +917,74 @@ function playerProgress() {
   return p.lapsCompleted + (p.lapsCompleted === 0 && s > 0.72 ? s - 1 : s);
 }
 
+// Keep a short timeline of every car's race progress. Comparing the leader's
+// timeline against a chaser's current progress gives the time gap you would
+// see on an F1 timing tower, rather than a guessed distance/speed division.
+function recordGapHistory() {
+  if (!race || race.state !== 'racing') return;
+  const now = race.time;
+  const push = (history, progress) => {
+    const last = history[history.length - 1];
+    if (last && now - last.t < 90) return;
+    history.push({ t: now, p: progress });
+    if (history.length > 2600) history.splice(0, 400);
+  };
+  push(race.player.history, playerProgress());
+  for (const a of race.ai) {
+    const progress = a.finished ? TOTAL_LAPS : Math.min(TOTAL_LAPS, a.dist / race.track.length);
+    push(a.history, progress);
+  }
+}
+
+function gapToLeaderSeconds(leader, progress, speed) {
+  const history = leader.history;
+  if (!history || history.length < 2) return 0;
+  const first = history[0];
+  const last = history[history.length - 1];
+  if (progress >= last.p) return 0;
+  if (progress < first.p) {
+    // Before the leader's first sample (the grid): no elapsed race time yet.
+    if (race.time < 600) return 0;
+    const metres = (first.p - progress) * race.track.length;
+    return metres / Math.max(24, speed);
+  }
+  // Binary search for the first timeline sample at or beyond this progress.
+  let lo = 0, hi = history.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (history[mid].p >= progress) hi = mid; else lo = mid + 1;
+  }
+  const b = history[lo];
+  const a = history[Math.max(0, lo - 1)];
+  if (b === a) return Math.max(0, (race.time - b.t) / 1000);
+  const f = clamp((progress - a.p) / Math.max(1e-6, b.p - a.p), 0, 1);
+  const tAt = a.t + (b.t - a.t) * f;
+  return Math.max(0, (race.time - tAt) / 1000);
+}
+
 function getStandings() {
   const p = race.player;
   const playerP = playerProgress();
   const rows = [{
-    name: 'YOU', color: '#ff4d1f', progress: playerP,
+    name: 'YOU', color: '#ff4d1f', progress: playerP, history: p.history,
+    speed: Math.abs(p.vLong), finishTime: p.finishTime,
     isPlayer: true, lap: Math.min(TOTAL_LAPS, p.lapsCompleted + 1), finished: p.finished
   }];
   for (const a of race.ai) {
-    const prog = a.dist / race.track.length;
+    const raw = a.dist / race.track.length;
     rows.push({
-      name: a.name, color: a.color, progress: prog,
+      name: a.name, color: a.color, progress: a.finished ? TOTAL_LAPS : Math.min(TOTAL_LAPS, raw),
+      history: a.history, speed: a.speed, finishTime: a.finishTime,
       isPlayer: false, lap: clamp(Math.floor(a.dist / race.track.length) + 1, 1, TOTAL_LAPS),
       finished: a.finished
     });
   }
-  rows.sort((a, b) => b.progress - a.progress);
+  rows.sort((a, b) => {
+    if (a.finished && b.finished) return a.finishTime - b.finishTime;
+    if (a.finished) return -1;
+    if (b.finished) return 1;
+    return b.progress - a.progress;
+  });
   return rows;
 }
 
@@ -1489,12 +1546,23 @@ function updateHUD(dt) {
 
   race.leaderTimer -= dt;
   if (race.leaderTimer <= 0) {
-    race.leaderTimer = 0.28;
+    race.leaderTimer = 0.24;
     const leader = standings[0];
-    dom.leaderboard.innerHTML = standings.map((row, i) => {
-      const diff = (leader.progress - row.progress) * race.track.length;
-      const gap = i === 0 ? 'LEAD' : (diff < 1 ? '0.0' : `+${(diff / 42).toFixed(1)}`);
-      return `<div class="lb-row${row.isPlayer ? ' is-player' : ''}">
+    race.gapShown = race.gapShown || {};
+    dom.leaderboardRows.innerHTML = standings.map((row, i) => {
+      let gapSec = 0;
+      if (i > 0) {
+        if (row.finished && leader.finished && row.finishTime != null && leader.finishTime != null) {
+          gapSec = Math.max(0, (row.finishTime - leader.finishTime) / 1000);
+        } else {
+          gapSec = gapToLeaderSeconds(leader, row.progress, (row.speed + leader.speed) * 0.5);
+        }
+      }
+      const prev = race.gapShown[row.name];
+      const shown = prev == null ? gapSec : prev + (gapSec - prev) * 0.5;
+      race.gapShown[row.name] = shown;
+      const gap = i === 0 ? 'LEADER' : race.state === 'countdown' ? '—' : `+${shown.toFixed(3)}`;
+      return `<div class="lb-row${row.isPlayer ? ' is-player' : ''}${i === 0 ? ' is-leader' : ''}">
         <span class="lb-pos">${i + 1}</span>
         <i class="lb-col" style="background:${row.color}"></i>
         <span class="lb-name">${row.name}</span>
@@ -1735,6 +1803,7 @@ function updateRace(dt) {
     resolveCarCollisions(dt);
     updatePlayerVisual(dt);
     updatePlayerProgress(dt);
+    recordGapHistory();
     race.smoke.update(dt);
     updateRaceCamera(dt);
     updateHUD(dt);
