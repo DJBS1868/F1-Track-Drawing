@@ -945,23 +945,36 @@ class SmokeSystem {
 /* ═══════════════════════════════════════════════════════════════════
    Race setup
    ═══════════════════════════════════════════════════════════════════ */
-const GRID_GAP = 9.5;
-const GRID_FIRST = 9;
-const AI_LANES = [-3.05, 0, 3.05];
+const GRID_GAP = 11;
+const GRID_FIRST = 10;
+const GRID_STAGGER = 5.2;
+const GRID_LATERAL = 2.75;
 
-function hideAllScreens() {
-  for (const el of [dom.menu, dom.draw, dom.build, dom.garage]) el.classList.remove('is-active');
+// Proper staggered grid: two cars per row, one either side of the centre line,
+// with the right-hand car a few metres further back. Slot order is decided by
+// the caller, so grid position and driver pace stay independent.
+function gridDistance(slot) {
+  const row = Math.floor(slot / 2);
+  const col = slot % 2;
+  return -(GRID_FIRST + row * GRID_GAP + col * GRID_STAGGER);
 }
 
-function gridPose(slot, lateral) {
-  const behind = GRID_FIRST + slot * GRID_GAP;
-  const s = sampleAtDistance(race.track, -behind);
+function gridPose(slot) {
+  const dist = gridDistance(slot);
+  const lateral = (slot % 2 === 0 ? -1 : 1) * GRID_LATERAL;
+  const s = sampleAtDistance(race.track, dist);
   return {
     x: s.x + s.nx * lateral,
     z: s.z + s.nz * lateral,
     yaw: Math.atan2(s.tx, s.tz),
+    lateral,
+    dist,
     s
   };
+}
+
+function hideAllScreens() {
+  for (const el of [dom.menu, dom.draw, dom.build, dom.garage]) el.classList.remove('is-active');
 }
 
 // Invisible timing gates spaced around the lap. They are never rendered: they
@@ -994,7 +1007,7 @@ function enterRace(trackData) {
   });
   world.scene.add(playerCar.root);
 
-  const ai = AI_TEAMS.slice(0, setup.aiCount).map((team, i) => {
+  const ai = AI_TEAMS.slice(0, setup.aiCount).map((team) => {
     const model = createCar({
       paint: team.paint, accent: team.accent, accent2: team.accent2, driver: team.driver,
       number: team.number, showDecals: true
@@ -1006,24 +1019,38 @@ function enterRace(trackData) {
       model,
       dist: 0,
       speed: 0,
+      lateral: 0,
+      lastX: 0,
+      lastZ: 0,
+      lastYaw: 0,
       finished: false,
       finishTime: null,
       history: [],
       phase: Math.random() * TAU,
-      pace: 0.968 + Math.random() * 0.064,
+      pace: 0.945 + Math.random() * 0.103,
       form: 1,
       formTarget: 1,
       formTimer: 2 + Math.random() * 5,
-      lane: i % AI_LANES.length,
-      laneCooldown: 0,
-      startDelay: 0.15 + Math.random() * 0.6,
+      pushAt: 0.3 + Math.random() * 0.55,
+      pushFor: 0.08 + Math.random() * 0.07,
+      slumpAt: Math.random() < 0.45 ? 0.3 + Math.random() * 0.55 : 2,
+      slumpFor: 0.06 + Math.random() * 0.06,
       nerve: 0.72 + Math.random() * 0.4,
-      lateral: AI_LANES[i % AI_LANES.length]
+      launch: 0.95 + Math.random() * 0.22,
+      startDelay: 0.15 + Math.random() * 0.6,
+      slowBias: 0.985 + Math.random() * 0.03,
+      fastBias: 0.985 + Math.random() * 0.03,
+      passSide: 0,
+      passLat: 0,
+      passUntil: 0,
+      mistakeTimer: 10 + Math.random() * 18,
+      mistakeTime: 0,
+      mistakeSide: 1,
+      blocker: null,
+      blockerGap: Infinity
     };
   });
-  // Reverse-grid the field by pace: the quickest drivers start at the back and
-  // have to race forward, which keeps the order moving instead of freezing.
-  ai.sort((a, b) => a.pace - b.pace);
+  // Grid order is decided fresh in resetRaceState(), where pace is also drawn.
 
   const smoke = new SmokeSystem(world.scene);
 
@@ -1086,12 +1113,13 @@ function resetRaceState() {
   const r = race;
   const p = r.player;
 
-  // The player starts behind the selected AI field, including a solo front-row start.
+  // The player starts behind the selected AI field on a fresh staggered grid.
   const playerGridSlot = r.ai.length;
-  const pose = gridPose(playerGridSlot, -2.9);
+  const pose = gridPose(playerGridSlot);
   p.pos = { x: pose.x, z: pose.z };
   p.vel = { x: 0, z: 0 };
   p.yaw = pose.yaw;
+  p.lateral = pose.lateral;
   p.steer = 0; p.throttle = 0; p.brake = 0;
   p.vLong = 0; p.vLat = 0; p.prevVLong = 0; p.yawRate = 0;
   p.offroad = false; p.offTimer = 0;
@@ -1105,7 +1133,7 @@ function resetRaceState() {
   p.history = [];
   const startIndex = r.locator.nearest(pose.x, pose.z).index;
   p.lastIndex = startIndex;
-  p.progressDist = -(GRID_FIRST + playerGridSlot * GRID_GAP);
+  p.progressDist = pose.dist;
   p.cpNext = 0;
   p.cpArmed = false;
   p.sNorm = (startIndex % r.track.N) / r.track.N;
@@ -1117,27 +1145,69 @@ function resetRaceState() {
   r.playerCar.setDRS(false);
   r.playerCar.setBrake(false);
 
-  // Fresh pace for the field each race, then reverse-grid the quickest cars so
-  // there is always someone carving through the pack.
-  for (const a of r.ai) a.pace = 0.968 + Math.random() * 0.064;
-  r.ai.sort((a, b) => a.pace - b.pace);
+  // Fresh pace, form and grid order for the field every race. Pace is dealt out
+  // as a spread ladder, so there is always a genuinely quick car and a genuinely
+  // slow one, and the quick one has to pass people to win.
+  const paceLadder = r.ai.length > 1
+    ? r.ai.map((_, i) => 0.945 + (i / (r.ai.length - 1)) * 0.103)
+    : [0.995];
+  for (let i = paceLadder.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [paceLadder[i], paceLadder[j]] = [paceLadder[j], paceLadder[i]];
+  }
   r.ai.forEach((a, i) => {
-    a.lane = i % AI_LANES.length;
-    const lane = AI_LANES[a.lane];
-    const gp = gridPose(i, lane);
-    a.dist = -(GRID_FIRST + i * GRID_GAP);
+    a.pace = paceLadder[i] + (Math.random() - 0.5) * 0.01;
+    a.slowBias = 0.985 + Math.random() * 0.03;
+    a.fastBias = 0.985 + Math.random() * 0.03;
+    a.launch = 0.95 + Math.random() * 0.22;
+  });
+  // The quickest third is held back: they draw random slots at the back of the
+  // grid while everyone else fills the front at random. The fastest cars always
+  // have real work to do, but the grid still looks different every race.
+  const shuffleInPlace = (list) => {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  };
+  const byPace = [...r.ai].sort((a, b) => b.pace - a.pace);
+  const heldBack = byPace.length >= 3 ? Math.floor(byPace.length / 3) : 0;
+  const frontCount = byPace.length - heldBack;
+  // Shuffle the two groups separately so every grid slot is filled exactly once.
+  const gridOrder = new Array(byPace.length);
+  const frontSlots = shuffleInPlace(Array.from({ length: frontCount }, (_, i) => i));
+  const backSlots = shuffleInPlace(Array.from({ length: heldBack }, (_, i) => frontCount + i));
+  byPace.slice(heldBack).forEach((a, i) => { gridOrder[frontSlots[i]] = a; });
+  byPace.slice(0, heldBack).forEach((a, i) => { gridOrder[backSlots[i]] = a; });
+  gridOrder.forEach((a, i) => {
+    const gp = gridPose(i);
+    a.dist = gp.dist;
     a.speed = 0;
+    a.lateral = gp.lateral;
+    a.lastX = gp.x;
+    a.lastZ = gp.z;
+    a.lastYaw = gp.yaw;
     a.finished = false;
     a.finishTime = null;
     a.history = [];
     a.form = 1;
     a.formTarget = 1;
     a.formTimer = 2 + Math.random() * 5;
-    a.laneCooldown = 0;
+    a.pushAt = 0.3 + Math.random() * 0.55;
+    a.pushFor = 0.08 + Math.random() * 0.07;
+    a.slumpAt = Math.random() < 0.45 ? 0.3 + Math.random() * 0.55 : 2;
+    a.slumpFor = 0.06 + Math.random() * 0.06;
     a.startDelay = 0.15 + Math.random() * 0.6;
     a.nerve = 0.72 + Math.random() * 0.4;
     a.phase = Math.random() * TAU;
-    a.lateral = lane;
+    a.passSide = 0;
+    a.passLat = gp.lateral;
+    a.passUntil = 0;
+    a.mistakeTimer = 10 + Math.random() * 18;
+    a.mistakeTime = 0;
+    a.blocker = null;
+    a.blockerGap = Infinity;
     setCarPose(a.model, gp.x, gp.z, gp.yaw);
     a.model.body.rotation.set(0, 0, 0);
     a.model.setDRS(false);
@@ -1274,9 +1344,7 @@ function drawMinimap() {
   ctx.drawImage(race.map.canvas, 0, 0);
 
   for (const a of race.ai) {
-    const s = sampleAtDistance(race.track, a.dist);
-    const lat = a.lateral + Math.sin(a.dist / 48 + a.phase) * 0.7;
-    const q = mapPoint(s.x + s.nx * lat, s.z + s.nz * lat);
+    const q = mapPoint(a.lastX, a.lastZ);
     ctx.save();
     ctx.fillStyle = a.color;
     ctx.strokeStyle = 'rgba(4,6,9,.9)';
@@ -1579,6 +1647,7 @@ function updatePlayerPhysics(dt) {
   p.lastIndex = near.index;
   p.sNorm = (near.index % tr.N) / tr.N;
   p.trackDist = near.dist;
+  p.lateral = (p.pos.x - sample.x) * sample.nx + (p.pos.z - sample.z) * sample.nz;
   p.lastK = sample.k;
   p.offroad = near.dist > tr.halfWidth + 1.15;
   p.onKerb = !p.offroad && near.dist > tr.halfWidth - 0.55 && near.dist < tr.halfWidth + 1.6;
@@ -1912,11 +1981,13 @@ function resolveCarCollisions(dt = 1 / 60) {
 
     // Keep the AI model where we just shoved it so the next frame agrees.
     const as = sampleAtDistance(tr, a.dist);
-    const lat = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.85;
-    const ax2 = as.x + as.nx * lat;
-    const az2 = as.z + as.nz * lat;
+    const ax2 = as.x + as.nx * a.lateral;
+    const az2 = as.z + as.nz * a.lateral;
     a.model.root.position.set(ax2, 0, az2);
     a.model.root.rotation.y = Math.atan2(as.tx, as.tz);
+    a.lastX = ax2;
+    a.lastZ = az2;
+    a.lastYaw = a.model.root.rotation.y;
 
     if (vn < -1.4 && contactCooldown <= 0) {
       contactCooldown = 0.22;
@@ -1931,24 +2002,101 @@ function resolveCarCollisions(dt = 1 / 60) {
   }
 }
 
-function findAiBlocker(a, ai) {
+const AI_LINE_MARGIN = 1.9;
+const AI_PASS_GAP = 3.15;
+const AI_MIN_SIDE_GAP = 2.5;
+
+function aiTrackLimit() {
+  return Math.max(2.8, race.track.halfWidth - AI_LINE_MARGIN);
+}
+
+function findAiBlocker(a, field) {
   let blocker = null;
   let gap = Infinity;
-  for (const b of ai) {
-    if (b === a || b.lane !== a.lane) continue;
+  for (const b of field) {
+    if (b === a) continue;
     const d = b.dist - a.dist;
-    if (d > 0.2 && d < gap && d < 45) { blocker = b; gap = d; }
+    // Only cars close enough ahead and sharing our piece of road can block us.
+    if (d < 0.2 || d > 34) continue;
+    if (Math.abs(b.lateral - a.lateral) > 2.9) continue;
+    if (d < gap) { blocker = b; gap = d; }
   }
   return { blocker, gap };
 }
 
-function aiLaneClear(a, lane, ai) {
-  for (const b of ai) {
-    if (b === a || b.lane !== lane) continue;
-    const d = b.dist - a.dist;
-    if (d > -8 && d < 15) return false;
+// The racing line: cut the apex, run wide on exit, and gradually settle back to
+// the middle on straights. Every driver leans on the kerbs a little differently.
+function aiRacingLine(a, s, limit) {
+  const tight = clamp(Math.abs(s.k) / (1 / 58), 0, 1);
+  const apex = Math.sign(s.k) * limit * (0.62 + a.nerve * 0.22) * tight;
+  const weave = Math.sin(a.dist / 74 + a.phase) * 0.28 * (1 - tight);
+  if (a.finished) return -Math.sign(s.k || 1) * limit * 0.55;
+  return apex + weave;
+}
+
+function aiPassCandidate(a, field, blocker, limit, tr) {
+  const s = sampleAtDistance(tr, blocker.dist);
+  const inside = Math.sign(s.k) || 1;
+  const options = [];
+  for (const side of [-1, 1]) {
+    const lat = clamp(blocker.lateral + side * AI_PASS_GAP, -limit, limit);
+    if (Math.abs(lat - blocker.lateral) < AI_PASS_GAP - 0.35) continue;
+    let clear = true;
+    for (const b of field) {
+      if (b === a || b === blocker) continue;
+      const d = b.dist - a.dist;
+      if (d < -4 || d > 15) continue;
+      if (Math.abs(b.lateral - lat) < AI_MIN_SIDE_GAP) { clear = false; break; }
+    }
+    const room = side < 0 ? blocker.lateral + limit : limit - blocker.lateral;
+    options.push({
+      side, lat, clear, room,
+      score: (clear ? 20 : 0) + room + (side === inside ? 1.2 : 0)
+    });
   }
-  return true;
+  options.sort((x, y) => y.score - x.score);
+  return options[0] || null;
+}
+
+function planAiOvertake(a, field, limit, tr) {
+  const blocker = a.blocker;
+  if (!blocker || a.finished) return;
+  const gap = a.blockerGap;
+  if (gap > 28) return;
+  const closing = a.speed - blocker.speed;
+  // A faster car commits early and gets alongside before it arrives. A car that
+  // is simply about to run into the back of someone also has to react.
+  if (closing < 0.35 && gap > 7.5) return;
+  const pick = aiPassCandidate(a, field, blocker, limit, tr);
+  if (!pick) return;
+  if (!pick.clear && gap > 6.5) return;
+  a.passSide = pick.side;
+  a.passLat = pick.lat;
+  a.passUntil = race.time + 1600 + Math.random() * 1300;
+}
+
+// Keep the field from driving through itself. Cars that are side by side stay a
+// car's width apart; a car that is still directly behind lifts and tucks in.
+function separateAiCars(ai, limit) {
+  for (let i = 0; i < ai.length; i++) {
+    const a = ai[i];
+    for (let j = i + 1; j < ai.length; j++) {
+      const b = ai[j];
+      const d = b.dist - a.dist;
+      if (Math.abs(d) > 5.2) continue;
+      const sideGap = b.lateral - a.lateral;
+      if (Math.abs(sideGap) >= AI_MIN_SIDE_GAP) continue;
+      const side = Math.sign(sideGap) || (a.passSide || 1);
+      const push = (AI_MIN_SIDE_GAP - Math.abs(sideGap)) * 0.5;
+      a.lateral = clamp(a.lateral - side * push, -limit, limit);
+      b.lateral = clamp(b.lateral + side * push, -limit, limit);
+      if (Math.abs(b.lateral - a.lateral) < 1.85) {
+        const front = d > 0 ? b : a;
+        const back = d > 0 ? a : b;
+        back.speed = Math.min(back.speed, Math.max(0, front.speed * 0.965));
+      }
+    }
+  }
 }
 
 function updateAI(dt) {
@@ -1956,72 +2104,96 @@ function updateAI(dt) {
   const L = tr.length;
   const diff = DIFFICULTY[diffLevel] || DIFFICULTY.pro;
   const ai = race.ai;
+  const limit = aiTrackLimit();
+  const now = race.time;
 
-  // Decide who is stuck behind whom before anyone moves.
+  // Everyone races everyone, including the player. A single grid of rivals lets
+  // the AI pick a side and actually fight for the place instead of following.
+  const p = race.player;
+  const field = ai.slice();
+  if (!p.finished) {
+    field.push({
+      isPlayer: true,
+      name: 'YOU',
+      dist: p.progressDist,
+      lateral: p.lateral || 0,
+      speed: Math.abs(p.vLong),
+      finished: false
+    });
+  }
+
+  // Form and mistakes give each driver a rhythm across the race. Nobody is a
+  // metronome, and a small error opens a real passing opportunity.
   for (const a of ai) {
-    a.laneCooldown = Math.max(0, a.laneCooldown - dt);
     a.formTimer -= dt;
     if (a.formTimer <= 0) {
-      a.formTimer = 7 + Math.random() * 8;
-      a.formTarget = 0.985 + Math.random() * 0.03;
+      a.formTimer = 6 + Math.random() * 6;
+      a.formTarget = 0.975 + Math.random() * 0.05;
     }
-    a.form = damp(a.form, a.formTarget, 0.55, dt);
-    const look = findAiBlocker(a, ai);
+    a.form = damp(a.form, a.formTarget, 0.5, dt);
+
+    a.mistakeTimer -= dt;
+    if (a.mistakeTimer <= 0) {
+      a.mistakeTimer = 13 + Math.random() * 22;
+      if (Math.random() < 0.45 && !a.finished) {
+        a.mistakeTime = 0.7 + Math.random() * 1.1;
+        a.mistakeSide = Math.random() < 0.5 ? -1 : 1;
+      }
+    }
+    if (a.mistakeTime > 0) a.mistakeTime = Math.max(0, a.mistakeTime - dt);
+
+    const look = findAiBlocker(a, field);
     a.blocker = look.blocker;
     a.blockerGap = look.gap;
   }
 
-  // Faster cars look for a clear lane and go racing. The quickest drivers are
-  // prepared to commit from further back; the conservative ones wait a little.
-  for (const a of ai) {
-    const blocker = a.blocker;
-    if (!blocker || a.finished || a.laneCooldown > 0) continue;
-    const trigger = 11 + (a.nerve - 0.72) * 30;
-    if (a.blockerGap > trigger) continue;
-    const quicker = a.pace * a.form > blocker.pace * blocker.form * 0.999;
-    const aboutToHit = a.blockerGap < 6.5;
-    if (!quicker && !aboutToHit) continue;
-    const dirs = a.lane === 0 ? [1] : a.lane === AI_LANES.length - 1 ? [-1]
-      : (Math.random() < 0.5 ? [-1, 1] : [1, -1]);
-    for (const dir of dirs) {
-      const lane = a.lane + dir;
-      if (lane < 0 || lane >= AI_LANES.length) continue;
-      if (!aiLaneClear(a, lane, ai)) continue;
-      a.lane = lane;
-      a.laneCooldown = 1.2 + Math.random() * 1.4;
-      break;
-    }
-  }
+  for (const a of ai) planAiOvertake(a, field, limit, tr);
 
   for (const a of ai) {
     const norm = ((a.dist % L) + L) % L;
     const idx = Math.floor(norm / tr.step) % tr.N;
     const s = tr.samples[idx];
     let target = tr.speedProfile[idx] * diff.factor * a.pace * a.form;
-    if (race.time < a.startDelay * 1000) target *= 0.35;
-    if (a.finished) target *= 0.55;
 
-    // Traffic awareness: hold a gap to the car directly ahead in this lane,
-    // and only squeeze past once a neighbouring lane is clear.
-    if (a.blocker && a.blocker.lane === a.lane && !a.finished) {
-      const gap = a.blocker.dist - a.dist;
-      const room = 6.5 + a.speed * 0.03;
-      if (gap > 0 && gap < room) {
-        // Sit just behind the car ahead instead of bumping it, while the lane
-        // logic looks for a way past.
-        target = Math.min(target, Math.max(8, a.blocker.speed * (0.975 + (gap / room) * 0.02)));
-      } else if (gap >= room && gap < room + 14) {
-        target = Math.min(target, a.blocker.speed + (gap - room) * 0.35);
-      }
+    // Some drivers are brave in the slow stuff, others carry more through the
+    // fast corners. That difference is what turns a queue into a race.
+    const tight = clamp((Math.abs(s.k) - 1 / 170) / (1 / 55 - 1 / 170), 0, 1);
+    target *= lerp(a.fastBias, a.slowBias, tight);
+
+    // Tyres fade a little over a long run, and the launch is a personal thing.
+    const raceFrac = clamp(a.dist / (race.totalLaps * L), 0, 1);
+    target *= 1 - Math.max(0, raceFrac - 0.2) * 0.022;
+    // Second wind / mid-race slump: a driver finds extra pace (or loses the
+    // tyres) for a stretch, which is what creates late-race position changes.
+    if (raceFrac > a.pushAt && raceFrac < a.pushAt + a.pushFor) target *= 1.038;
+    if (raceFrac > a.slumpAt && raceFrac < a.slumpAt + a.slumpFor) target *= 0.975;
+    const sinceGo = now - a.startDelay * 1000;
+    if (sinceGo < 0) target = 0;
+    else if (sinceGo < 1200) target *= clamp(0.22 + (sinceGo / 1200) * 0.92, 0, 1);
+
+    // Slipstream: tuck in behind the car ahead and get a run on it.
+    if (a.blocker && a.blockerGap < 16 && !a.finished) target *= 1.018;
+
+    // Overtake mode: once committed, the passing car leans on the car ahead and
+    // finishes the move instead of sitting in dirty air. The big gain arrives on
+    // the straights, where a slipstream pass actually happens.
+    if (a.passUntil > now && a.blocker && a.blockerGap < 22 && !a.finished) {
+      target *= Math.abs(s.k) < 1 / 120 ? 1.055 : 1.015;
     }
 
-    // Small per-driver corner appetite: braver drivers carry a touch more pace
-    // through the fast stuff without turning every lap into a procession.
-    const cornerLoad = clamp(Math.abs(s.k) * 85, 0, 1);
-    target *= 1 + (a.nerve - 0.92) * cornerLoad * 0.018;
+    const latGap = a.blocker ? Math.abs(a.lateral - a.blocker.lateral) : 99;
+    const boxed = a.blocker && a.blockerGap < 5.0 && latGap < 2.2;
+    if (boxed && !a.finished) {
+      // Directly behind and boxed in: lift to avoid driving through the car,
+      // while the line logic works on getting us out of the pocket.
+      target = Math.min(target, Math.max(6, a.blocker.speed * 0.99));
+    } else if (a.blocker && latGap < 2.2 && a.blockerGap < 11 && !a.finished) {
+      target = Math.min(target, a.blocker.speed + (a.blockerGap - 5) * 0.55);
+    }
+    if (a.finished) target *= 0.5;
 
-    if (a.speed < target) a.speed = Math.min(target, a.speed + diff.accel * dt);
-    else a.speed = Math.max(target, a.speed - 29 * dt);
+    if (a.speed < target) a.speed = Math.min(target, a.speed + diff.accel * a.launch * dt);
+    else a.speed = Math.max(target, a.speed - 30 * dt);
     a.dist += a.speed * dt;
 
     if (!a.finished && a.dist >= race.totalLaps * L) {
@@ -2029,23 +2201,49 @@ function updateAI(dt) {
       a.finishTime = race.time;
     }
 
-    // A shove from contact pushes the AI off line; ease it back to its lane.
-    a.lateral = damp(a.lateral, AI_LANES[a.lane] ?? 0, 2.2, dt);
-    const lateral = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.32;
-    const x = s.x + s.nx * lateral;
-    const z = s.z + s.nz * lateral;
+    // Choose where on the road to put the car: racing line, or a pass down one
+    // side. Avoid any car we are already alongside, so we never steer into it.
+    let targetLat = aiRacingLine(a, s, limit);
+    if (a.passUntil > now && !a.finished) targetLat = a.passLat;
+    if (a.mistakeTime > 0) targetLat = clamp(targetLat + a.mistakeSide * 1.6, -limit, limit);
+
+    for (const b of field) {
+      if (b === a) continue;
+      const d = b.dist - a.dist;
+      if (Math.abs(d) > 4.8) continue;
+      if (Math.abs(targetLat - b.lateral) >= AI_MIN_SIDE_GAP + 0.08) continue;
+      const side = Math.sign(targetLat - b.lateral) || a.passSide || Math.sign(targetLat) || 1;
+      targetLat = clamp(b.lateral + side * (AI_MIN_SIDE_GAP + 0.08), -limit, limit);
+    }
+
+    // Rate-limit the sideways move so a lane change looks like a car changing
+    // its line, not a snap across the circuit.
+    const latRate = 4.6 + a.nerve * 1.8;
+    a.lateral += clamp(targetLat - a.lateral, -latRate * dt, latRate * dt);
+    a.lateral = clamp(a.lateral, -limit, limit);
+  }
+
+  separateAiCars(ai, limit);
+
+  for (const a of ai) {
+    const s = sampleAtDistance(tr, a.dist);
+    const x = s.x + s.nx * a.lateral;
+    const z = s.z + s.nz * a.lateral;
     const yaw = Math.atan2(s.tx, s.tz);
+    a.lastX = x;
+    a.lastZ = z;
+    a.lastYaw = yaw;
     a.model.root.position.set(x, 0, z);
     a.model.root.rotation.y = yaw;
     a.model.body.rotation.z = damp(a.model.body.rotation.z, clamp(-s.k * a.speed * a.speed * 0.0016, -0.06, 0.06), 6, dt);
     a.model.body.rotation.x = 0;
-    const steer = clamp(s.k * 6, -0.4, 0.4);
+    const steer = clamp(s.k * 6 + (a.passUntil > now ? a.passSide * 0.08 : 0), -0.45, 0.45);
     for (const w of a.model.wheels) {
       w.spin.rotation.x += (a.speed / w.radius) * dt;
       if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, steer, 10, dt);
     }
-    const braking = target < a.speed - 0.6 || (a.blocker && a.blockerGap < 6);
-    a.model.setDRS(a.speed > 60 && Math.abs(s.k) < 1 / 420);
+    const braking = a.speed > 1 && (a.blockerGap < 5.6 || Math.abs(s.k) > 1 / 95);
+    a.model.setDRS(a.speed > 58 && Math.abs(s.k) < 1 / 420);
     a.model.setBrake(braking);
   }
 }
