@@ -101,10 +101,17 @@
     </header>
 
     <main class="garage-stage">
+      <div class="garage-orbit" id="garage-orbit" tabindex="0" role="application"
+        aria-label="Drag or use the arrow keys to rotate the car preview">
+        <div class="garage-orbit-hint" id="garage-orbit-hint">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>DRAG TO SPIN<span class="garage-orbit-hint-more"> · ALL ANGLES</span></span>
+        </div>
+      </div>
       <div class="garage-stage-copy">
         <div class="eyebrow"><span class="eyebrow-line"></span>PERSONAL LIVERY</div>
         <h2>YOUR CAR.<br><em>YOUR COLOUR.</em></h2>
-        <p>Pick a factory finish, spin the colour wheel, or type an exact hex code. Your livery is saved and carried straight onto the grid.</p>
+        <p>Pick a factory finish, spin the colour wheel, or type an exact hex code. Drag the car to inspect every angle — your livery is saved and carried straight onto the grid.</p>
       </div>
       <div class="garage-live" aria-live="polite">
         <span class="garage-live-dot" id="garage-live-dot"></span>

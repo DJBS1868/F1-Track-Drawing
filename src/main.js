@@ -58,6 +58,7 @@ const dom = {
   garageCustomLabel: $('garage-custom-label'), garageParts: $('garage-parts'),
   garageStickerTargets: $('garage-sticker-targets'), garageStickers: $('garage-stickers'),
   garageStickerClear: $('garage-sticker-clear'),
+  garageOrbit: $('garage-orbit'), garageOrbitHint: $('garage-orbit-hint'),
   soundButtons: [$('btn-sound-menu'), $('btn-sound-draw'), $('btn-sound-garage')],
   difficultyButtons: [...document.querySelectorAll('#difficulty button')]
 };
@@ -531,6 +532,27 @@ function initShowroom() {
   showroom.camera.updateProjectionMatrix();
 }
 
+/* Keep the car framed in the open stage area so the workshop dock never hides it. */
+function updateGarageFraming() {
+  if (!showroom) return;
+  if (appState !== 'garage') {
+    showroom.setViewShift(0);
+    return;
+  }
+  const stage = dom.garageOrbit?.parentElement;
+  if (!stage) return;
+  const rect = stage.getBoundingClientRect();
+  if (!rect.height) return;
+  const h = window.innerHeight || 1;
+  const center = rect.top + rect.height / 2;
+  const shift = clamp(h / 2 - center, -h * 0.3, h * 0.3);
+  // Nudge the hero car right of the headline on wide layouts.
+  const shiftX = window.innerWidth > 900 ? -Math.min(92, window.innerWidth * 0.062) : 0;
+  // Keep the car inside the visible stage on short/wide viewports.
+  const fit = clamp((window.innerWidth * 0.172) / Math.max(120, rect.height * 0.7), 1, 2);
+  showroom.setViewShift(shift, shiftX, fit);
+}
+
 function enterMenu() {
   appState = 'menu';
   setScreen('menu');
@@ -542,6 +564,7 @@ function enterMenu() {
   updateMenuCard();
   if (!showroom) initShowroom();
   showroom?.setMode('menu');
+  showroom?.setViewShift(0);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -749,6 +772,8 @@ function enterGarage() {
   drawScreen?.stop();
   if (!showroom) initShowroom();
   showroom?.setMode('garage');
+  updateGarageFraming();
+  requestAnimationFrame(updateGarageFraming);
   updateGarageUI();
 }
 
@@ -2793,6 +2818,85 @@ function wireEvents() {
     audio.click(520);
     enterMenu();
   });
+
+  /* Drag / keyboard orbit for the garage car preview. */
+  if (dom.garageOrbit) {
+    const orbit = dom.garageOrbit;
+    let activePointer = null;
+    let lastX = 0;
+    let lastT = 0;
+    const markUsed = () => dom.garageOrbitHint?.classList.add('is-used');
+
+    orbit.addEventListener('pointerdown', (e) => {
+      if (appState !== 'garage') return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      activePointer = e.pointerId;
+      lastX = e.clientX;
+      lastT = performance.now();
+      try { orbit.setPointerCapture(e.pointerId); } catch {}
+      try { orbit.focus({ preventScroll: true }); } catch {}
+      showroom?.beginOrbit();
+      markUsed();
+      e.preventDefault();
+    });
+
+    orbit.addEventListener('pointermove', (e) => {
+      if (activePointer !== e.pointerId) return;
+      const now = performance.now();
+      const dt = Math.max(0.008, (now - lastT) / 1000);
+      const dx = e.clientX - lastX;
+      lastX = e.clientX;
+      lastT = now;
+      showroom?.orbitBy(dx, dt);
+    });
+
+    const endOrbit = (e) => {
+      if (e.pointerId !== activePointer) return;
+      activePointer = null;
+      showroom?.endOrbit();
+      try { orbit.releasePointerCapture(e.pointerId); } catch {}
+    };
+    orbit.addEventListener('pointerup', endOrbit);
+    orbit.addEventListener('pointercancel', endOrbit);
+    orbit.addEventListener('lostpointercapture', (e) => {
+      if (activePointer !== e.pointerId) return;
+      activePointer = null;
+      showroom?.endOrbit();
+    });
+
+    orbit.addEventListener('dblclick', () => {
+      showroom?.resetOrbit();
+      dom.garageOrbitHint?.classList.remove('is-used');
+      audio.click(520);
+    });
+
+    orbit.addEventListener('keydown', (e) => {
+      let handled = true;
+      if (e.key === 'ArrowLeft') {
+        showroom?.nudgeOrbit(e.shiftKey ? 0.42 : 0.16);
+      } else if (e.key === 'ArrowRight') {
+        showroom?.nudgeOrbit(e.shiftKey ? -0.42 : -0.16);
+      } else if (e.key === 'Home' || e.key.toLowerCase() === 'r') {
+        showroom?.resetOrbit();
+        dom.garageOrbitHint?.classList.remove('is-used');
+      } else {
+        handled = false;
+      }
+      if (handled) {
+        e.preventDefault();
+        markUsed();
+        audio.click(420);
+      }
+    });
+  }
+
+  if (window.ResizeObserver) {
+    const observer = new ResizeObserver(() => updateGarageFraming());
+    const stage = dom.garageOrbit?.parentElement;
+    const dock = dom.garage?.querySelector('.garage-dock');
+    if (stage) observer.observe(stage);
+    if (dock) observer.observe(dock);
+  }
   dom.garageColorWheel.addEventListener('input', () => {
     applyGarageColor(dom.garageColorWheel.value, { persist: false });
   });
@@ -2914,6 +3018,7 @@ function onResize() {
     race.camera.aspect = w / h;
     race.camera.updateProjectionMatrix();
   }
+  updateGarageFraming();
 }
 window.addEventListener('resize', onResize);
 
@@ -2992,6 +3097,7 @@ async function boot() {
     get state() { return appState; },
     get race() { return race; },
     get drawScreen() { return drawScreen; },
+    get showroom() { return showroom; },
     startDrawing,
     beginBuild,
     enterMenu,

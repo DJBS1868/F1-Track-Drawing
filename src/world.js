@@ -997,24 +997,93 @@ export function createShowroom(car) {
 
   const baseY = 0.02;
   let mode = 'menu';
+  let viewShift = 0;
+  let viewShiftX = 0;
+  let viewFit = 1;
+  let autoAngle = 0;
+  let manualAngle = 0;
+  let spinVelocity = 0;
+  let dragging = false;
+  let hasInteracted = false;
+
+  function applyViewShift() {
+    const w = window.innerWidth || 1;
+    const h = window.innerHeight || 1;
+    if (Math.abs(viewShift) < 0.5 && Math.abs(viewShiftX) < 0.5) {
+      camera.clearViewOffset();
+    } else {
+      // Shift the frustum so the car sits inside the open stage above the
+      // workshop dock instead of behind it.
+      camera.setViewOffset(w, h, viewShiftX, viewShift, w, h);
+    }
+  }
 
   return {
-    scene, camera,
-    setMode(next) { mode = next === 'garage' ? 'garage' : 'menu'; },
+    scene, camera, car,
+    setMode(next) {
+      mode = next === 'garage' ? 'garage' : 'menu';
+      if (mode !== 'garage') {
+        dragging = false;
+        spinVelocity = 0;
+      }
+    },
+    setViewShift(pixels, horizontal = 0, fit = 1) {
+      viewShift = Number.isFinite(pixels) ? pixels : 0;
+      viewShiftX = Number.isFinite(horizontal) ? horizontal : 0;
+      viewFit = Number.isFinite(fit) ? Math.max(0.5, Math.min(2.2, fit)) : 1;
+      applyViewShift();
+    },
+    beginOrbit() {
+      dragging = true;
+      hasInteracted = true;
+      spinVelocity = 0;
+    },
+    orbitBy(dx, dt = 1 / 60) {
+      if (!dragging || !dx) return;
+      const delta = -dx * 0.0085;
+      manualAngle += delta;
+      spinVelocity = Math.max(-9, Math.min(9, delta / Math.max(0.008, dt)));
+    },
+    endOrbit() {
+      dragging = false;
+    },
+    nudgeOrbit(radians) {
+      hasInteracted = true;
+      dragging = false;
+      spinVelocity = 0;
+      manualAngle += radians;
+    },
+    resetOrbit() {
+      dragging = false;
+      hasInteracted = false;
+      manualAngle = 0;
+      autoAngle = 0;
+      spinVelocity = 0;
+    },
+    get orbitAngle() { return manualAngle; },
     update(t, dt) {
       const portrait = camera.aspect < 0.85;
       if (mode === 'garage') {
-        car.root.rotation.y = -0.52 + t * 0.16;
+        if (!hasInteracted) autoAngle += dt * 0.18;
+        if (!dragging && spinVelocity) {
+          manualAngle += spinVelocity * dt;
+          spinVelocity *= Math.exp(-3.6 * dt);
+          if (Math.abs(spinVelocity) < 0.02) spinVelocity = 0;
+        }
+        car.root.rotation.y = -0.52 + manualAngle + autoAngle;
         car.root.position.y = baseY + Math.sin(t * 0.9) * 0.006;
         if (portrait) {
-          camera.position.x = 8.9 + Math.sin(t * 0.16) * 0.12;
-          camera.position.y = 3.45 + Math.sin(t * 0.21) * 0.06;
-          camera.position.z = 16.4;
+          camera.position.x = 8.9 + Math.sin(t * 0.16) * 0.1;
+          camera.position.y = 3.35 + Math.sin(t * 0.21) * 0.05;
+          camera.position.z = 15.1;
           camera.lookAt(1.5, 0.72, 0);
         } else {
-          camera.position.x = 7.15 + Math.sin(t * 0.16) * 0.12;
-          camera.position.y = 2.75 + Math.sin(t * 0.21) * 0.06;
-          camera.position.z = 8.9;
+          // Pull the camera back on narrower desktops so the car never
+          // sprawls across the headline.
+          const distScale = clamp(21.3 / Math.max(0.9, camera.aspect) / 11.4, 0.85, 1.7) * viewFit;
+          camera.position.x = 1.45 + 5.7 * distScale + Math.sin(t * 0.16) * 0.12;
+          camera.position.y = 0.8 + 1.95 * distScale + Math.sin(t * 0.21) * 0.06;
+          camera.position.z = 8.9 * distScale;
           camera.lookAt(1.45, 0.8, 0);
         }
         if (camera.fov !== (portrait ? 40 : 34)) {
