@@ -33,20 +33,21 @@ function loft(sections, material, { radial = 14, power = 0.62 } = {}) {
       const b = i * radial + ((j + 1) % radial);
       const c = (i + 1) * radial + j;
       const d = (i + 1) * radial + ((j + 1) % radial);
-      indices.push(a, c, b, b, c, d);
+      // Counter-clockwise from outside so front-face culling keeps the hull solid.
+      indices.push(a, b, c, b, d, c);
     }
   }
   // caps
   const firstCenter = positions.length / 3;
   positions.push(0, sections[0].y, sections[0].z);
   for (let j = 0; j < radial; j++) {
-    indices.push(firstCenter, j, (j + 1) % radial);
+    indices.push(firstCenter, (j + 1) % radial, j);
   }
   const lastBase = (rings.length - 1) * radial;
   const lastCenter = positions.length / 3;
   positions.push(0, sections[sections.length - 1].y, sections[sections.length - 1].z);
   for (let j = 0; j < radial; j++) {
-    indices.push(lastCenter, lastBase + ((j + 1) % radial), lastBase + j);
+    indices.push(lastCenter, lastBase + j, lastBase + ((j + 1) % radial));
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));

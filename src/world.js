@@ -1046,7 +1046,7 @@ export function createShowroom(car) {
     },
     orbitBy(dx, dt = 1 / 60) {
       if (!dragging || !dx) return;
-      const delta = -dx * 0.0085;
+      const delta = dx * 0.0085;
       manualAngle += delta;
       spinVelocity = Math.max(-9, Math.min(9, delta / Math.max(0.008, dt)));
     },

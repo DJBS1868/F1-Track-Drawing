@@ -2877,9 +2877,9 @@ function wireEvents() {
     orbit.addEventListener('keydown', (e) => {
       let handled = true;
       if (e.key === 'ArrowLeft') {
-        showroom?.nudgeOrbit(e.shiftKey ? 0.42 : 0.16);
-      } else if (e.key === 'ArrowRight') {
         showroom?.nudgeOrbit(e.shiftKey ? -0.42 : -0.16);
+      } else if (e.key === 'ArrowRight') {
+        showroom?.nudgeOrbit(e.shiftKey ? 0.42 : 0.16);
       } else if (e.key === 'Home' || e.key.toLowerCase() === 'r') {
         showroom?.resetOrbit();
         dom.garageOrbitHint?.classList.remove('is-used');
