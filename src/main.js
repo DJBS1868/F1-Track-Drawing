@@ -18,6 +18,7 @@ const dom = {
   pause: $('screen-pause'), results: $('screen-results'), hud: $('race-hud'),
   loading: $('loading'), toast: $('toast'),
   btnStart: $('btn-start'), btnLastTrack: $('btn-last-track'), lastTrackLabel: $('last-track-label'),
+  setupLaps: $('setup-laps'), setupAI: $('setup-ai'),
   menuCard: $('menu-card'), menuCardChip: $('menu-card-chip'), menuMinimap: $('menu-minimap'),
   menuStatLength: $('menu-stat-length'), menuStatTurns: $('menu-stat-turns'),
   menuStatBest: $('menu-stat-best'), menuCardFoot: $('menu-card-foot'),
@@ -75,6 +76,27 @@ let building = false;
 let toastTimer = 0;
 let diffLevel = 'pro';
 try { diffLevel = localStorage.getItem('apexink.difficulty') || 'pro'; } catch {}
+
+const RACE_SETUP_DEFAULTS = { laps: 3, ai: 3 };
+try {
+  const savedLaps = localStorage.getItem('apexink.laps');
+  const savedAI = localStorage.getItem('apexink.ai');
+  if (savedLaps !== null && Number.isInteger(Number(savedLaps)) && Number(savedLaps) >= 1 && Number(savedLaps) <= 10) {
+    dom.setupLaps.value = savedLaps;
+  }
+  if (savedAI !== null && Number.isInteger(Number(savedAI)) && Number(savedAI) >= 0 && Number(savedAI) <= 9) {
+    dom.setupAI.value = savedAI;
+  }
+} catch {}
+
+function getRaceSetup() {
+  const laps = Number(dom.setupLaps.value);
+  const ai = Number(dom.setupAI.value);
+  return {
+    totalLaps: Number.isInteger(laps) ? clamp(laps, 1, 10) : RACE_SETUP_DEFAULTS.laps,
+    aiCount: Number.isInteger(ai) ? clamp(ai, 0, 9) : RACE_SETUP_DEFAULTS.ai
+  };
+}
 
 const input = {
   gas: false, brake: false, left: false, right: false, handbrake: false,
@@ -590,7 +612,6 @@ class SmokeSystem {
    ═══════════════════════════════════════════════════════════════════ */
 const GRID_GAP = 9.5;
 const GRID_FIRST = 9;
-const TOTAL_LAPS = 3;
 
 function hideAllScreens() {
   for (const el of [dom.menu, dom.draw, dom.build]) el.classList.remove('is-active');
@@ -616,6 +637,7 @@ function enterRace(trackData) {
     race = null;
   }
 
+  const setup = getRaceSetup();
   const world = createRaceWorld(trackData);
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
   const playerCar = createCar({
@@ -623,10 +645,10 @@ function enterRace(trackData) {
   });
   world.scene.add(playerCar.root);
 
-  const ai = AI_TEAMS.map((team, i) => {
+  const ai = AI_TEAMS.slice(0, setup.aiCount).map((team, i) => {
     const model = createCar({
       paint: team.paint, accent: team.accent, accent2: team.accent2, driver: team.driver,
-      number: ['21', '03', '88'][i], showDecals: true
+      number: team.number, showDecals: true
     });
     world.scene.add(model.root);
     return {
@@ -648,6 +670,8 @@ function enterRace(trackData) {
 
   race = {
     track: trackData,
+    totalLaps: setup.totalLaps,
+    aiCount: setup.aiCount,
     world,
     camera,
     playerCar,
@@ -673,7 +697,7 @@ function enterRace(trackData) {
       vLong: 0, vLat: 0, prevVLong: 0, yawRate: 0, offroad: false, offTimer: 0,
       lapsCompleted: 0, lapStart: 0, prevS: 0, sNorm: 0, sectors: [false, false, false],
       bestLap: null, lastLap: null, topSpeed: 0, finished: false, finishTime: null,
-      finishPosition: 4, drs: false, trackDist: 0, assistState: 'auto', history: []
+      finishPosition: setup.aiCount + 1, drs: false, trackDist: 0, assistState: 'auto', history: []
     }
   };
 
@@ -701,8 +725,9 @@ function resetRaceState() {
   const r = race;
   const p = r.player;
 
-  // player starts P4, last on the grid
-  const pose = gridPose(3, -2.9);
+  // The player starts behind the selected AI field, including a solo front-row start.
+  const playerGridSlot = r.ai.length;
+  const pose = gridPose(playerGridSlot, -2.9);
   p.pos = { x: pose.x, z: pose.z };
   p.vel = { x: 0, z: 0 };
   p.yaw = pose.yaw;
@@ -713,7 +738,7 @@ function resetRaceState() {
   p.sectors = [false, false, false];
   p.bestLap = readBest(r.track.seed);
   p.lastLap = null; p.topSpeed = 0;
-  p.finished = false; p.finishTime = null; p.finishPosition = 4;
+  p.finished = false; p.finishTime = null; p.finishPosition = r.ai.length + 1;
   p.drs = false; p.trackDist = 0;
   p.assistState = 'auto';
   p.history = [];
@@ -766,9 +791,9 @@ function resetRaceState() {
   dom.hudTime.textContent = '0:00.000';
   dom.hudLast.textContent = '—:—.———';
   dom.hudBest.textContent = p.bestLap ? formatTime(p.bestLap) : '—:—.———';
-  dom.hudPosition.textContent = '4';
-  dom.hudPositionTotal.textContent = '/4';
-  dom.hudLap.innerHTML = 'LAP 1<em>/3</em>';
+  dom.hudPosition.textContent = String(r.ai.length + 1);
+  dom.hudPositionTotal.textContent = `/${r.ai.length + 1}`;
+  dom.hudLap.innerHTML = `LAP 1<em>/${r.totalLaps}</em>`;
   dom.hudSpeed.textContent = '0';
   dom.hudGear.textContent = 'N';
   dom.speedoFill.style.strokeDashoffset = '100';
@@ -913,7 +938,7 @@ function drawMinimap() {
    ═══════════════════════════════════════════════════════════════════ */
 function playerProgress() {
   const p = race.player;
-  if (p.finished) return TOTAL_LAPS;
+  if (p.finished) return race.totalLaps;
   const s = p.sNorm;
   return p.lapsCompleted + (p.lapsCompleted === 0 && s > 0.72 ? s - 1 : s);
 }
@@ -932,7 +957,7 @@ function recordGapHistory() {
   };
   push(race.player.history, playerProgress());
   for (const a of race.ai) {
-    const progress = a.finished ? TOTAL_LAPS : Math.min(TOTAL_LAPS, a.dist / race.track.length);
+    const progress = a.finished ? race.totalLaps : Math.min(race.totalLaps, a.dist / race.track.length);
     push(a.history, progress);
   }
 }
@@ -969,14 +994,14 @@ function getStandings() {
   const rows = [{
     name: 'YOU', color: '#ff4d1f', progress: playerP, history: p.history,
     speed: Math.abs(p.vLong), finishTime: p.finishTime,
-    isPlayer: true, lap: Math.min(TOTAL_LAPS, p.lapsCompleted + 1), finished: p.finished
+    isPlayer: true, lap: Math.min(race.totalLaps, p.lapsCompleted + 1), finished: p.finished
   }];
   for (const a of race.ai) {
     const raw = a.dist / race.track.length;
     rows.push({
-      name: a.name, color: a.color, progress: a.finished ? TOTAL_LAPS : Math.min(TOTAL_LAPS, raw),
+      name: a.name, color: a.color, progress: a.finished ? race.totalLaps : Math.min(race.totalLaps, raw),
       history: a.history, speed: a.speed, finishTime: a.finishTime,
-      isPlayer: false, lap: clamp(Math.floor(a.dist / race.track.length) + 1, 1, TOTAL_LAPS),
+      isPlayer: false, lap: clamp(Math.floor(a.dist / race.track.length) + 1, 1, race.totalLaps),
       finished: a.finished
     });
   }
@@ -1276,13 +1301,13 @@ function completeLap() {
   p.lapsCompleted++;
   p.lapStart = race.time;
   p.sectors = [false, false, false];
-  if (p.lapsCompleted >= TOTAL_LAPS) {
+  if (p.lapsCompleted >= race.totalLaps) {
     finishRace();
-  } else if (p.lapsCompleted === TOTAL_LAPS - 1) {
+  } else if (p.lapsCompleted === race.totalLaps - 1) {
     showRaceMessage('FINAL LAP', 'EVERYTHING YOU HAVE', 2300, true);
     audio.tone(880, 0.18, 0.06, 'triangle');
   } else {
-    showRaceMessage(`LAP ${p.lapsCompleted + 1} / ${TOTAL_LAPS}`, 'KEEP IT CLEAN', 1900);
+    showRaceMessage(`LAP ${p.lapsCompleted + 1} / ${race.totalLaps}`, 'KEEP IT CLEAN', 1900);
     audio.tone(660, 0.1, 0.04, 'triangle');
   }
 }
@@ -1472,7 +1497,7 @@ function updateAI(dt) {
     else a.speed = Math.max(target, a.speed - 27 * dt);
     a.dist += a.speed * dt;
 
-    if (!a.finished && a.dist >= TOTAL_LAPS * L) {
+    if (!a.finished && a.dist >= race.totalLaps * L) {
       a.finished = true;
       a.finishTime = race.time;
     }
@@ -1527,9 +1552,9 @@ function updateHUD(dt) {
   const kmh = Math.abs(p.vLong) * 3.6;
 
   dom.hudPosition.textContent = String(pos);
-  dom.hudPositionTotal.textContent = '/4';
-  const lap = Math.min(TOTAL_LAPS, p.lapsCompleted + 1);
-  dom.hudLap.innerHTML = `LAP ${lap}<em>/${TOTAL_LAPS}</em>`;
+  dom.hudPositionTotal.textContent = `/${race.ai.length + 1}`;
+  const lap = Math.min(race.totalLaps, p.lapsCompleted + 1);
+  dom.hudLap.innerHTML = `LAP ${lap}<em>/${race.totalLaps}</em>`;
   dom.hudTime.textContent = formatTime(race.time);
   dom.hudLast.textContent = p.lastLap ? formatTime(p.lastLap) : '—:—.———';
   dom.hudBest.textContent = p.bestLap ? formatTime(p.bestLap) : '—:—.———';
@@ -1837,15 +1862,15 @@ function showResults() {
   const playerTime = p.finishTime || race.time;
   const rows = race.ai.map((a) => {
     const progress = a.dist / tr.length;
-    const lap = clamp(Math.floor(a.dist / tr.length) + 1, 1, TOTAL_LAPS);
+    const lap = clamp(Math.floor(a.dist / tr.length) + 1, 1, race.totalLaps);
     if (a.finished && a.finishTime != null) {
-      return { name: a.name, color: a.color, time: a.finishTime, lap: `${lap}/3`, finished: true, progress };
+      return { name: a.name, color: a.color, time: a.finishTime, lap: `${lap}/${race.totalLaps}`, finished: true, progress };
     }
-    const remaining = Math.max(0, TOTAL_LAPS * tr.length - a.dist);
+    const remaining = Math.max(0, race.totalLaps * tr.length - a.dist);
     const eta = playerTime + (remaining / Math.max(a.speed, 24)) * 1000;
-    return { name: a.name, color: a.color, time: eta, lap: `${Math.min(lap, 2)}/3`, finished: false, progress };
+    return { name: a.name, color: a.color, time: eta, lap: `${Math.min(lap, race.totalLaps)}/${race.totalLaps}`, finished: false, progress };
   });
-  rows.push({ name: 'YOU', color: '#ff4d1f', time: playerTime, lap: '3/3', finished: true, isPlayer: true, progress: 3 });
+  rows.push({ name: 'YOU', color: '#ff4d1f', time: playerTime, lap: `${race.totalLaps}/${race.totalLaps}`, finished: true, isPlayer: true, progress: race.totalLaps });
   rows.sort((a, b) => a.time - b.time);
   const pos = rows.findIndex((r) => r.isPlayer) + 1;
   p.finishPosition = pos;
@@ -1888,7 +1913,7 @@ function pauseRace() {
   const standings = getStandings();
   const pos = standings.findIndex((r) => r.isPlayer) + 1;
   dom.pausePosition.textContent = `P${pos}`;
-  dom.pauseLap.textContent = `${Math.min(TOTAL_LAPS, race.player.lapsCompleted + 1)} / ${TOTAL_LAPS}`;
+  dom.pauseLap.textContent = `${Math.min(race.totalLaps, race.player.lapsCompleted + 1)} / ${race.totalLaps}`;
   dom.pauseBest.textContent = race.player.bestLap ? formatTime(race.player.bestLap) : '—';
   showModal(dom.pause, true);
   audio.setPaused(true);
@@ -2024,6 +2049,12 @@ function wireTouchControls() {
    ═══════════════════════════════════════════════════════════════════ */
 
 function wireEvents() {
+  dom.setupLaps.addEventListener('change', () => {
+    try { localStorage.setItem('apexink.laps', dom.setupLaps.value); } catch {}
+  });
+  dom.setupAI.addEventListener('change', () => {
+    try { localStorage.setItem('apexink.ai', dom.setupAI.value); } catch {}
+  });
   dom.btnStart.addEventListener('click', startDrawing);
   dom.btnBackMenu.addEventListener('click', () => {
     drawScreen.stop();

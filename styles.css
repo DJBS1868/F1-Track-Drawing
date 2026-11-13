@@ -201,6 +201,22 @@ a { color: inherit; }
   color: #b9bbc0; font-size: 15.5px; font-weight: 300; line-height: 1.7;
 }
 .lede b { color: var(--cream); font-weight: 600; }
+.race-setup {
+  display: flex; align-items: end; flex-wrap: wrap; gap: 10px;
+  margin: -10px 0 22px;
+}
+.race-setting { display: flex; flex-direction: column; gap: 6px; }
+.race-setting > span { color: var(--dim-2); font-size: 8px; letter-spacing: .18em; }
+.race-setting select {
+  min-width: 116px; padding: 9px 30px 9px 11px;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 2px;
+  background: rgba(15,17,21,.9); color: var(--cream);
+  font: 600 11px var(--font-mono); letter-spacing: .08em;
+  outline: none; cursor: pointer;
+}
+.race-setting select:focus-visible { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(255,77,31,.18); }
+.race-setting option { background: #101216; color: var(--cream); }
+.race-setup-note { align-self: center; padding: 0 2px 9px; color: var(--dim-2); font-size: 8px; letter-spacing: .12em; }
 .menu-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; }
 .menu-actions .btn { flex-direction: column; gap: 2px; }
 .menu-actions .btn svg { position: absolute; right: 22px; top: 50%; translate: 0 -50%; }

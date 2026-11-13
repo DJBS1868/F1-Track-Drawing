@@ -38,7 +38,23 @@
       <div class="menu-copy">
         <div class="eyebrow"><span class="eyebrow-line"></span>THE TRACK BUILDER RACER</div>
         <h1>DRAW THE<br><em>LINE.</em></h1>
-        <p class="lede">Sketch a circuit on paper. We turn it into a living race track, then drop you into an F1 car to find its limits over three laps.</p>
+        <p class="lede">Sketch a circuit on paper. We turn it into a living race track, then drop you into an F1 car to find its limits.</p>
+        <div class="race-setup" aria-label="Race setup">
+          <label class="race-setting"><span class="mono">LAPS</span>
+            <select id="setup-laps" aria-label="Number of laps">
+              <option value="1">1 LAP</option><option value="2">2 LAPS</option><option value="3" selected>3 LAPS</option>
+              <option value="4">4 LAPS</option><option value="5">5 LAPS</option><option value="6">6 LAPS</option>
+              <option value="7">7 LAPS</option><option value="8">8 LAPS</option><option value="9">9 LAPS</option><option value="10">10 LAPS</option>
+            </select>
+          </label>
+          <label class="race-setting"><span class="mono">AI RACERS</span>
+            <select id="setup-ai" aria-label="Number of AI racers">
+              <option value="0">0 AI</option><option value="1">1 AI</option><option value="2">2 AI</option><option value="3" selected>3 AI</option>
+              <option value="4">4 AI</option><option value="5">5 AI</option><option value="6">6 AI</option><option value="7">7 AI</option><option value="8">8 AI</option><option value="9">9 AI</option>
+            </select>
+          </label>
+          <span class="race-setup-note mono">UP TO 10 CARS TOTAL</span>
+        </div>
         <div class="menu-actions">
           <button id="btn-start" class="btn btn-primary btn-lg">
             <span>START DRAWING</span>

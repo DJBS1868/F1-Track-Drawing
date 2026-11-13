@@ -438,7 +438,13 @@ export function createCar({
 }
 
 export const AI_TEAMS = [
-  { name: 'VEGA', paint: 0x25b8d8, accent: 0xf3efe5, accent2: 0x79e6ff, driver: 0x1d242b },
-  { name: 'KOSMO', paint: 0xb9f34a, accent: 0x17191c, accent2: 0xd7ff6b, driver: 0xe6ffb0 },
-  { name: 'RUSH', paint: 0xff7a20, accent: 0xf3efe5, accent2: 0xffb27a, driver: 0x2b160a }
+  { name: 'VEGA', number: '21', paint: 0x25b8d8, accent: 0xf3efe5, accent2: 0x79e6ff, driver: 0x1d242b },
+  { name: 'KOSMO', number: '03', paint: 0xb9f34a, accent: 0x17191c, accent2: 0xd7ff6b, driver: 0xe6ffb0 },
+  { name: 'RUSH', number: '88', paint: 0xff7a20, accent: 0xf3efe5, accent2: 0xffb27a, driver: 0x2b160a },
+  { name: 'NOVA', number: '14', paint: 0x9b6cff, accent: 0xf3efe5, accent2: 0xc3a7ff, driver: 0x211637 },
+  { name: 'VOLT', number: '62', paint: 0xf0d329, accent: 0x17191c, accent2: 0xffed73, driver: 0x3a3212 },
+  { name: 'APEX', number: '09', paint: 0xe83e8c, accent: 0xf3efe5, accent2: 0xff8fbd, driver: 0x351326 },
+  { name: 'DRIFT', number: '35', paint: 0x56bd75, accent: 0x17191c, accent2: 0x91e8a9, driver: 0x173321 },
+  { name: 'ORBIT', number: '77', paint: 0xe7e9ed, accent: 0x17191c, accent2: 0xffffff, driver: 0x252a32 },
+  { name: 'EMBER', number: '48', paint: 0xb64c35, accent: 0xf3efe5, accent2: 0xf18a70, driver: 0x35180f }
 ];
