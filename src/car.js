@@ -417,7 +417,12 @@ export function createCar({
   return {
     root, body, wheels,
     brakeMat, drsGroup, drsFlap,
-    paint, player,
+    get paint() { return paint; },
+    player,
+    setPaint(value) {
+      paintMat.color.set(value);
+      paint = typeof value === 'number' ? value : paintMat.color.getHex();
+    },
     setBrake(on) { brakeMat.emissiveIntensity = on ? 5 : 1.2; },
     setDRS(open) { drsGroup.rotation.x = open ? -0.55 : 0; },
     dispose() {

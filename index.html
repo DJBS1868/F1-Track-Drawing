@@ -39,30 +39,14 @@
         <div class="eyebrow"><span class="eyebrow-line"></span>THE TRACK BUILDER RACER</div>
         <h1>DRAW THE<br><em>LINE.</em></h1>
         <p class="lede">Sketch a circuit on paper. We turn it into a living race track, then drop you into an F1 car to find its limits.</p>
-        <div class="race-setup" aria-label="Race setup">
-          <label class="race-setting"><span class="mono">LAPS</span>
-            <select id="setup-laps" aria-label="Number of laps">
-              <option value="1">1 LAP</option><option value="2">2 LAPS</option><option value="3" selected>3 LAPS</option>
-              <option value="4">4 LAPS</option><option value="5">5 LAPS</option><option value="6">6 LAPS</option>
-              <option value="7">7 LAPS</option><option value="8">8 LAPS</option><option value="9">9 LAPS</option><option value="10">10 LAPS</option>
-            </select>
-          </label>
-          <label class="race-setting"><span class="mono">AI RACERS</span>
-            <select id="setup-ai" aria-label="Number of AI racers">
-              <option value="0">0 AI</option><option value="1">1 AI</option><option value="2">2 AI</option><option value="3" selected>3 AI</option>
-              <option value="4">4 AI</option><option value="5">5 AI</option><option value="6">6 AI</option><option value="7">7 AI</option><option value="8">8 AI</option><option value="9">9 AI</option>
-            </select>
-          </label>
-          <span class="race-setup-note mono">UP TO 10 CARS TOTAL</span>
-        </div>
         <div class="menu-actions">
           <button id="btn-start" class="btn btn-primary btn-lg">
             <span>START DRAWING</span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <button id="btn-last-track" class="btn btn-ghost btn-lg is-hidden">
-            <span>RACE YOUR LAST CIRCUIT</span>
-            <small id="last-track-label">—</small>
+          <button id="btn-garage" class="btn btn-ghost btn-lg">
+            <span>GARAGE</span>
+            <small>CUSTOMISE YOUR LIVERY</small>
           </button>
         </div>
         <div class="menu-meta">
@@ -98,6 +82,72 @@
       </div>
       <span class="mono small">V1.0 · HEADPHONES RECOMMENDED</span>
     </footer>
+  </section>
+
+  <!-- ══════════════════════ GARAGE ══════════════════════ -->
+  <section id="screen-garage" class="screen garage-screen">
+    <header class="garage-header">
+      <div class="brand brand-small">
+        <span class="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M5 29c6-16 11-19 17-10s8 8 13-5" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg></span>
+        <span class="brand-word">APEX<span>INK</span></span>
+      </div>
+      <div class="garage-header-title mono">LIVERY STUDIO · CAR 07</div>
+      <div class="garage-header-right">
+        <button class="icon-btn" id="btn-sound-garage" aria-label="Toggle sound" title="Sound">
+          <svg class="ico-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path class="wave" d="M16 9c1.4 1.5 1.4 4.5 0 6M18.7 6.8c2.8 3 2.8 7.4 0 10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="btn-garage-exit">BACK</button>
+      </div>
+    </header>
+
+    <main class="garage-stage">
+      <div class="garage-stage-copy">
+        <div class="eyebrow"><span class="eyebrow-line"></span>PERSONAL LIVERY</div>
+        <h2>YOUR CAR.<br><em>YOUR COLOUR.</em></h2>
+        <p>Pick a factory finish, spin the colour wheel, or type an exact hex code. Your livery is saved and carried straight onto the grid.</p>
+      </div>
+      <div class="garage-live" aria-live="polite">
+        <span class="garage-live-dot" id="garage-live-dot"></span>
+        <div>
+          <span class="mono">CURRENT PAINT</span>
+          <strong id="garage-live-hex">#C90D19</strong>
+        </div>
+        <span class="garage-live-name mono" id="garage-live-name">FACTORY RED</span>
+      </div>
+    </main>
+
+    <div class="garage-dock panel-glass">
+      <div class="garage-dock-head">
+        <span class="mono">LIVERY WORKSHOP</span>
+        <span class="chip" id="garage-chip">CAR 07</span>
+      </div>
+      <div class="garage-dock-body">
+        <div class="garage-presets">
+          <span class="mono">PRESET COLOURS</span>
+          <div id="garage-swatches" class="garage-swatches" role="group" aria-label="Preset car colours"></div>
+        </div>
+        <div class="garage-custom">
+          <span class="mono">CUSTOM COLOUR</span>
+          <div class="garage-custom-row">
+            <label class="garage-wheel" title="Open the colour wheel">
+              <input type="color" id="garage-color-wheel" value="#c90d19" aria-label="Open colour wheel" />
+              <span class="garage-wheel-ui"><i></i>OPEN COLOR WHEEL</span>
+            </label>
+            <form id="garage-hex-form" class="garage-hex" autocomplete="off">
+              <label class="mono" for="garage-hex">HEX</label>
+              <span class="garage-hash" aria-hidden="true">#</span>
+              <input id="garage-hex" name="hex" type="text" maxlength="7" spellcheck="false" aria-label="Hex colour code" placeholder="C90D19" />
+              <button class="btn btn-ghost btn-sm" type="submit">APPLY</button>
+            </form>
+            <button class="link-btn garage-reset" id="garage-reset" type="button">FACTORY RED</button>
+          </div>
+        </div>
+      </div>
+      <div class="garage-dock-foot">
+        <span class="mono">LIVERY SAVED AUTOMATICALLY</span>
+        <span class="mono" id="garage-hint">ANY #RRGGBB VALUE ACCEPTED</span>
+      </div>
+    </div>
   </section>
 
   <!-- ══════════════════════ DRAW ══════════════════════ -->
@@ -155,7 +205,7 @@
         <div class="panel-scroll">
           <div class="step-label"><span class="mono">STEP 01 / DESIGN</span></div>
           <h2>Your hand.<br>Our asphalt.</h2>
-          <p class="panel-copy">One continuous line. Long sweepers, tight hairpins, awkward chicanes — whatever you draw gets paved, kerbed and wrapped in grandstands.</p>
+          <p class="panel-copy">One continuous line. Long sweepers, tight hairpins, awkward chicanes — we pave whatever you draw.</p>
 
           <div class="stat-grid">
             <div class="stat"><span class="mono">CIRCUIT LENGTH</span><strong id="stat-length">—</strong><small>METERS</small></div>
@@ -179,6 +229,28 @@
               <button data-level="ace">ACE</button>
             </div>
           </div>
+
+          <div class="race-setup race-setup-panel" aria-label="Race setup">
+            <label class="race-setting"><span class="mono">LAPS</span>
+              <select id="setup-laps" aria-label="Number of laps">
+                <option value="1">1 LAP</option><option value="2">2 LAPS</option><option value="3" selected>3 LAPS</option>
+                <option value="4">4 LAPS</option><option value="5">5 LAPS</option><option value="6">6 LAPS</option>
+                <option value="7">7 LAPS</option><option value="8">8 LAPS</option><option value="9">9 LAPS</option><option value="10">10 LAPS</option>
+              </select>
+            </label>
+            <label class="race-setting"><span class="mono">AI RACERS</span>
+              <select id="setup-ai" aria-label="Number of AI racers">
+                <option value="0">0 AI</option><option value="1">1 AI</option><option value="2">2 AI</option><option value="3" selected>3 AI</option>
+                <option value="4">4 AI</option><option value="5">5 AI</option><option value="6">6 AI</option><option value="7">7 AI</option><option value="8">8 AI</option><option value="9">9 AI</option>
+              </select>
+            </label>
+            <span class="race-setup-note mono">10 CARS MAX</span>
+          </div>
+
+          <button id="btn-last-track" class="btn btn-ghost btn-wide last-track-btn is-hidden">
+            <span>RACE YOUR LAST CIRCUIT</span>
+            <small id="last-track-label">—</small>
+          </button>
 
           <div class="panel-actions">
             <button id="btn-build" class="btn btn-primary btn-wide" disabled>

@@ -14,10 +14,11 @@ import {
 const $ = (id) => document.getElementById(id);
 const dom = {
   webgl: $('webgl'),
-  menu: $('screen-menu'), draw: $('screen-draw'), build: $('screen-build'),
+  menu: $('screen-menu'), draw: $('screen-draw'), build: $('screen-build'), garage: $('screen-garage'),
   pause: $('screen-pause'), results: $('screen-results'), hud: $('race-hud'),
   loading: $('loading'), toast: $('toast'),
   btnStart: $('btn-start'), btnLastTrack: $('btn-last-track'), lastTrackLabel: $('last-track-label'),
+  btnGarage: $('btn-garage'), btnGarageExit: $('btn-garage-exit'),
   setupLaps: $('setup-laps'), setupAI: $('setup-ai'),
   menuCard: $('menu-card'), menuCardChip: $('menu-card-chip'), menuMinimap: $('menu-minimap'),
   menuStatLength: $('menu-stat-length'), menuStatTurns: $('menu-stat-turns'),
@@ -49,7 +50,11 @@ const dom = {
   resultsSummary: $('results-summary'), resultsTime: $('results-time'), resultsBest: $('results-best'),
   resultsTop: $('results-top'), resultsLength: $('results-length'), resultsRows: $('results-rows'),
   btnRaceAgain: $('btn-race-again'), btnResultsNew: $('btn-results-new'),
-  soundButtons: [$('btn-sound-menu'), $('btn-sound-draw')],
+  garageSwatches: $('garage-swatches'), garageColorWheel: $('garage-color-wheel'),
+  garageHexForm: $('garage-hex-form'), garageHex: $('garage-hex'), garageReset: $('garage-reset'),
+  garageLiveDot: $('garage-live-dot'), garageLiveHex: $('garage-live-hex'),
+  garageLiveName: $('garage-live-name'), garageHint: $('garage-hint'),
+  soundButtons: [$('btn-sound-menu'), $('btn-sound-draw'), $('btn-sound-garage')],
   difficultyButtons: [...document.querySelectorAll('#difficulty button')]
 };
 
@@ -76,6 +81,47 @@ let building = false;
 let toastTimer = 0;
 let diffLevel = 'pro';
 try { diffLevel = localStorage.getItem('apexink.difficulty') || 'pro'; } catch {}
+
+/* Player livery is shared by the garage, the showroom and the race car. */
+const FACTORY_PAINT = '#C90D19';
+const GARAGE_PRESETS = [
+  { name: 'FACTORY RED', hex: '#C90D19' },
+  { name: 'PAPAYA', hex: '#FF7A20' },
+  { name: 'SOLAR', hex: '#F0D329' },
+  { name: 'LIME', hex: '#B9F34A' },
+  { name: 'MINT', hex: '#56BD75' },
+  { name: 'TEAL', hex: '#17C9A4' },
+  { name: 'ICE', hex: '#79E6FF' },
+  { name: 'AZURE', hex: '#25B8D8' },
+  { name: 'ULTRAMARINE', hex: '#2E6BFF' },
+  { name: 'VIOLET', hex: '#9B6CFF' },
+  { name: 'MAGENTA', hex: '#E83E8C' },
+  { name: 'COPPER', hex: '#B64C35' },
+  { name: 'SILVER', hex: '#E7E9ED' },
+  { name: 'MIDNIGHT', hex: '#17191C' }
+];
+
+function normalizeHex(value, { allowShort = true } = {}) {
+  if (typeof value !== 'string') return null;
+  let hex = value.trim().replace(/^#/, '');
+  if (!/^[0-9a-f]+$/i.test(hex)) return null;
+  if (allowShort && hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  if (hex.length !== 6) return null;
+  return `#${hex.toUpperCase()}`;
+}
+
+function hexToInt(hex) { return parseInt(hex.slice(1), 16); }
+
+function paintName(hex) {
+  const preset = GARAGE_PRESETS.find((p) => p.hex === hex);
+  return preset ? preset.name : 'CUSTOM PAINT';
+}
+
+let playerPaint = FACTORY_PAINT;
+try {
+  const savedPaint = normalizeHex(localStorage.getItem('apexink.paint') || '');
+  if (savedPaint) playerPaint = savedPaint;
+} catch {}
 
 const RACE_SETUP_DEFAULTS = { laps: 3, ai: 3 };
 try {
@@ -120,7 +166,7 @@ function toast(message, duration = 2400) {
 }
 
 function setScreen(name) {
-  for (const el of [dom.menu, dom.draw, dom.build]) {
+  for (const el of [dom.menu, dom.draw, dom.build, dom.garage]) {
     el.classList.toggle('is-active', el === dom[name]);
   }
 }
@@ -399,7 +445,9 @@ function initDrawScreen() {
    Showroom
    ═══════════════════════════════════════════════════════════════════ */
 function initShowroom() {
-  showroomCar = createCar({ paint: 0xc90d19, accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07' });
+  showroomCar = createCar({
+    paint: hexToInt(playerPaint), accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07'
+  });
   showroom = createShowroom(showroomCar);
   showroom.camera.aspect = window.innerWidth / window.innerHeight;
   showroom.camera.updateProjectionMatrix();
@@ -415,6 +463,82 @@ function enterMenu() {
   drawScreen?.stop();
   updateMenuCard();
   if (!showroom) initShowroom();
+  showroom?.setMode('menu');
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Garage — player livery
+   ═══════════════════════════════════════════════════════════════════ */
+function updateGarageUI() {
+  if (!dom.garageLiveHex) return;
+  dom.garageLiveHex.textContent = playerPaint;
+  dom.garageLiveName.textContent = paintName(playerPaint);
+  dom.garageLiveDot.style.background = playerPaint;
+  dom.garageLiveDot.style.boxShadow = `0 0 22px ${playerPaint}`;
+  dom.garageColorWheel.value = playerPaint.toLowerCase();
+  if (document.activeElement !== dom.garageHex) dom.garageHex.value = playerPaint.slice(1);
+  for (const swatch of dom.garageSwatches?.children || []) {
+    const active = swatch.dataset.hex === playerPaint;
+    swatch.classList.toggle('is-active', active);
+    swatch.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+}
+
+function applyPlayerPaint(value, { persist = true, announce = false } = {}) {
+  const hex = normalizeHex(value);
+  if (!hex) return false;
+  playerPaint = hex;
+  const paintInt = hexToInt(hex);
+  showroomCar?.setPaint(paintInt);
+  race?.playerCar?.setPaint(paintInt);
+  if (persist) {
+    try { localStorage.setItem('apexink.paint', hex); } catch {}
+  }
+  dom.garageHex?.classList.remove('is-invalid');
+  if (dom.garageHint) dom.garageHint.textContent = 'ANY #RRGGBB VALUE ACCEPTED';
+  updateGarageUI();
+  if (announce) {
+    audio.click(720);
+    toast(`LIVERY UPDATED · ${hex}`);
+  }
+  return true;
+}
+
+function buildGarageSwatches() {
+  if (!dom.garageSwatches) return;
+  dom.garageSwatches.replaceChildren();
+  GARAGE_PRESETS.forEach((preset) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'garage-swatch';
+    swatch.dataset.hex = preset.hex;
+    swatch.style.setProperty('--swatch', preset.hex);
+    swatch.title = `${preset.name} · ${preset.hex}`;
+    swatch.setAttribute('aria-label', `${preset.name}, ${preset.hex}`);
+    swatch.setAttribute('aria-pressed', 'false');
+    swatch.innerHTML = '<span aria-hidden="true"></span>';
+    swatch.addEventListener('click', () => {
+      audio.ensure();
+      applyPlayerPaint(preset.hex, { announce: true });
+    });
+    dom.garageSwatches.appendChild(swatch);
+  });
+  updateGarageUI();
+}
+
+function enterGarage() {
+  audio.ensure();
+  audio.click(620);
+  appState = 'garage';
+  setScreen('garage');
+  showModal(dom.pause, false);
+  showModal(dom.results, false);
+  showRaceHud(false);
+  dom.webgl.classList.remove('is-hidden', 'is-dim');
+  drawScreen?.stop();
+  if (!showroom) initShowroom();
+  showroom?.setMode('garage');
+  updateGarageUI();
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -614,7 +738,7 @@ const GRID_GAP = 9.5;
 const GRID_FIRST = 9;
 
 function hideAllScreens() {
-  for (const el of [dom.menu, dom.draw, dom.build]) el.classList.remove('is-active');
+  for (const el of [dom.menu, dom.draw, dom.build, dom.garage]) el.classList.remove('is-active');
 }
 
 function gridPose(slot, lateral) {
@@ -641,7 +765,7 @@ function enterRace(trackData) {
   const world = createRaceWorld(trackData);
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
   const playerCar = createCar({
-    paint: 0xc90d19, accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07', player: true
+    paint: hexToInt(playerPaint), accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07', player: true
   });
   world.scene.add(playerCar.root);
 
@@ -917,9 +1041,9 @@ function drawMinimap() {
   const dirX = Math.sin(p.yaw), dirZ = Math.cos(p.yaw);
   const perpX = dirZ, perpZ = -dirX;
   ctx.save();
-  ctx.shadowColor = 'rgba(255,77,31,.9)';
+  ctx.shadowColor = playerPaint;
   ctx.shadowBlur = 10;
-  ctx.fillStyle = '#ff4d1f';
+  ctx.fillStyle = playerPaint;
   ctx.strokeStyle = '#07090c';
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -992,7 +1116,7 @@ function getStandings() {
   const p = race.player;
   const playerP = playerProgress();
   const rows = [{
-    name: 'YOU', color: '#ff4d1f', progress: playerP, history: p.history,
+    name: 'YOU', color: playerPaint, progress: playerP, history: p.history,
     speed: Math.abs(p.vLong), finishTime: p.finishTime,
     isPlayer: true, lap: Math.min(race.totalLaps, p.lapsCompleted + 1), finished: p.finished
   }];
@@ -1870,7 +1994,7 @@ function showResults() {
     const eta = playerTime + (remaining / Math.max(a.speed, 24)) * 1000;
     return { name: a.name, color: a.color, time: eta, lap: `${Math.min(lap, race.totalLaps)}/${race.totalLaps}`, finished: false, progress };
   });
-  rows.push({ name: 'YOU', color: '#ff4d1f', time: playerTime, lap: `${race.totalLaps}/${race.totalLaps}`, finished: true, isPlayer: true, progress: race.totalLaps });
+  rows.push({ name: 'YOU', color: playerPaint, time: playerTime, lap: `${race.totalLaps}/${race.totalLaps}`, finished: true, isPlayer: true, progress: race.totalLaps });
   rows.sort((a, b) => a.time - b.time);
   const pos = rows.findIndex((r) => r.isPlayer) + 1;
   p.finishPosition = pos;
@@ -1947,6 +2071,7 @@ function goToDraw() {
   dom.webgl.classList.add('is-hidden');
   drawScreen.start();
   drawScreen.reset();
+  updateMenuCard();
   updateDrawStats(null);
   dom.drawStatus.textContent = 'DRAW A CLOSED LOOP';
 }
@@ -1964,6 +2089,7 @@ function startDrawing() {
   showRaceHud(false);
   drawScreen.start();
   drawScreen.reset();
+  updateMenuCard();
   updateDrawStats(null);
 }
 
@@ -1991,6 +2117,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.repeat) return;
+  if (e.code === 'Escape' && appState === 'garage') {
+    if (document.activeElement === dom.garageHex) dom.garageHex.blur();
+    else enterMenu();
+    e.preventDefault();
+    return;
+  }
   if (e.code === 'Escape' || e.code === 'KeyP') {
     if (appState !== 'race' || !race) return;
     if (race.state === 'paused') resumeRace();
@@ -2056,6 +2188,54 @@ function wireEvents() {
     try { localStorage.setItem('apexink.ai', dom.setupAI.value); } catch {}
   });
   dom.btnStart.addEventListener('click', startDrawing);
+  dom.btnGarage.addEventListener('click', enterGarage);
+  dom.btnGarageExit.addEventListener('click', () => {
+    audio.click(520);
+    enterMenu();
+  });
+  dom.garageColorWheel.addEventListener('input', () => {
+    applyPlayerPaint(dom.garageColorWheel.value, { persist: false });
+  });
+  dom.garageColorWheel.addEventListener('change', () => {
+    audio.ensure();
+    applyPlayerPaint(dom.garageColorWheel.value, { announce: true });
+  });
+  dom.garageHex.addEventListener('input', () => {
+    dom.garageHex.classList.remove('is-invalid');
+    const raw = dom.garageHex.value.trim().replace(/^#/, '');
+    if (raw.length === 6) {
+      const hex = normalizeHex(raw);
+      if (hex) applyPlayerPaint(hex, { persist: false });
+    }
+  });
+  dom.garageHex.addEventListener('blur', () => {
+    const hex = normalizeHex(dom.garageHex.value);
+    if (hex) {
+      applyPlayerPaint(hex);
+      dom.garageHex.value = hex.slice(1);
+    } else {
+      dom.garageHex.value = playerPaint.slice(1);
+    }
+    dom.garageHex.classList.remove('is-invalid');
+  });
+  dom.garageHexForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const hex = normalizeHex(dom.garageHex.value);
+    if (!hex) {
+      dom.garageHex.classList.add('is-invalid');
+      dom.garageHint.textContent = 'INVALID HEX · USE #RGB OR #RRGGBB';
+      toast('That is not a valid hex colour. Try #FF7A20.');
+      audio.click(220);
+      return;
+    }
+    dom.garageHex.classList.remove('is-invalid');
+    dom.garageHint.textContent = 'ANY #RRGGBB VALUE ACCEPTED';
+    dom.garageHex.value = hex.slice(1);
+    applyPlayerPaint(hex, { announce: true });
+  });
+  dom.garageReset.addEventListener('click', () => {
+    applyPlayerPaint(FACTORY_PAINT, { announce: true });
+  });
   dom.btnBackMenu.addEventListener('click', () => {
     drawScreen.stop();
     enterMenu();
@@ -2127,7 +2307,7 @@ function loop(now) {
   const dt = Math.min(0.05, Math.max(0.0001, (now - lastFrame) / 1000));
   lastFrame = now;
 
-  if (appState === 'menu' && showroom) {
+  if ((appState === 'menu' || appState === 'garage') && showroom) {
     showroom.update(now / 1000, dt);
     renderer.render(showroom.scene, showroom.camera);
   } else if ((appState === 'race') && race) {
@@ -2148,6 +2328,7 @@ function demoPoints(index = 0) {
 async function boot() {
   buildSpeedoTicks();
   initDifficultyUI();
+  buildGarageSwatches();
   initDrawScreen();
   refreshSoundUI();
   wireEvents();
@@ -2161,7 +2342,9 @@ async function boot() {
 
   const params = new URLSearchParams(window.location.search);
   const demo = params.get('demo');
-  if (demo === 'draw') {
+  if (demo === 'garage') {
+    setTimeout(enterGarage, 300);
+  } else if (demo === 'draw') {
     setTimeout(() => {
       startDrawing();
       setTimeout(() => drawScreen.loadExample(0), 450);
@@ -2191,11 +2374,13 @@ async function boot() {
     startDrawing,
     beginBuild,
     enterMenu,
+    enterGarage,
     goToDraw,
     startRaceNow,
     pauseRace,
     resumeRace,
     restartRace,
+    setPaint: (hex) => applyPlayerPaint(hex),
     demoPoints,
     demoRace: (index = 0, opts = {}) => beginBuild(demoPoints(index), { instant: true, ...opts }),
     setDemoInput: (obj) => Object.assign(input, obj),

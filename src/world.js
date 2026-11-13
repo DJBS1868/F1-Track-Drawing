@@ -996,15 +996,43 @@ export function createShowroom(car) {
   scene.add(car.root);
 
   const baseY = 0.02;
+  let mode = 'menu';
 
   return {
     scene, camera,
+    setMode(next) { mode = next === 'garage' ? 'garage' : 'menu'; },
     update(t, dt) {
-      car.root.rotation.y = -0.52 + Math.sin(t * 0.24) * 0.22;
-      car.root.position.y = baseY + Math.sin(t * 0.9) * 0.006;
-      camera.position.x = 7.4 + Math.sin(t * 0.12) * 0.55;
-      camera.position.y = 3.1 + Math.sin(t * 0.19) * 0.16;
-      camera.lookAt(1.2, 0.86, 0);
+      const portrait = camera.aspect < 0.85;
+      if (mode === 'garage') {
+        car.root.rotation.y = -0.52 + t * 0.16;
+        car.root.position.y = baseY + Math.sin(t * 0.9) * 0.006;
+        if (portrait) {
+          camera.position.x = 8.9 + Math.sin(t * 0.16) * 0.12;
+          camera.position.y = 3.45 + Math.sin(t * 0.21) * 0.06;
+          camera.position.z = 16.4;
+          camera.lookAt(1.5, 0.72, 0);
+        } else {
+          camera.position.x = 7.15 + Math.sin(t * 0.16) * 0.12;
+          camera.position.y = 2.75 + Math.sin(t * 0.21) * 0.06;
+          camera.position.z = 8.9;
+          camera.lookAt(1.45, 0.8, 0);
+        }
+        if (camera.fov !== (portrait ? 40 : 34)) {
+          camera.fov = portrait ? 40 : 34;
+          camera.updateProjectionMatrix();
+        }
+      } else {
+        car.root.rotation.y = -0.52 + Math.sin(t * 0.24) * 0.22;
+        car.root.position.y = baseY + Math.sin(t * 0.9) * 0.006;
+        camera.position.x = 7.4 + Math.sin(t * 0.12) * 0.55;
+        camera.position.y = 3.1 + Math.sin(t * 0.19) * 0.16;
+        camera.position.z = 9.2;
+        camera.lookAt(1.2, 0.86, 0);
+        if (camera.fov !== 34) {
+          camera.fov = 34;
+          camera.updateProjectionMatrix();
+        }
+      }
       ring.rotation.z = t * 0.08;
       ring2.rotation.z = -t * 0.05;
       const attr = dust.geometry.attributes.position;
