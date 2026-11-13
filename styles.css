@@ -776,7 +776,23 @@ a { color: inherit; }
 }
 .controls-hint.is-faded { opacity: 0; }
 
-.touch-controls { display: none; }
+.touch-controls {
+  display: none; position: absolute; left: 12px; right: 12px; bottom: 120px;
+  justify-content: space-between; align-items: flex-end;
+  pointer-events: none; z-index: 3;
+}
+.touch-steer, .touch-pedals { display: flex; gap: 10px; pointer-events: auto; }
+.touch-controls button {
+  width: 66px; height: 66px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.2);
+  background: rgba(12,14,18,.58); backdrop-filter: blur(8px);
+  font-family: var(--font-display); font-weight: 600; font-size: 11px; letter-spacing: .08em;
+  display: grid; place-items: center; touch-action: none; user-select: none;
+  color: var(--cream);
+}
+.touch-controls button svg { width: 24px; height: 24px; }
+.touch-controls button:active, .touch-controls button.is-down { background: var(--orange); color: #120b08; border-color: transparent; }
+.tap-gas { width: 74px !important; height: 74px !important; background: rgba(255,77,31,.22) !important; border-color: rgba(255,77,31,.55) !important; }
 
 /* ─────────────────────────────── modals ─────────────────────────────── */
 .modal-screen {
@@ -796,7 +812,15 @@ a { color: inherit; }
 .panel-glass::before {
   content: ''; position: absolute; top: 0; left: 0; width: 76px; height: 3px; background: var(--orange);
 }
-.modal { width: min(520px, 92vw); padding: 32px 34px 28px; }
+.modal {
+  width: min(520px, 92vw); padding: 32px 34px 28px;
+  max-height: calc(100dvh - 24px); overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.22) transparent;
+  overscroll-behavior: contain;
+}
+.modal::-webkit-scrollbar { width: 6px; }
+.modal::-webkit-scrollbar-track { background: transparent; }
+.modal::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 3px; }
 .modal-kicker { color: var(--orange); font-size: 8.5px; margin-bottom: 16px; }
 .modal h2 { font-family: var(--font-display); font-weight: 600; font-size: 58px; line-height: .84; text-transform: uppercase; letter-spacing: -.01em; margin: 0 0 24px; }
 .modal h2 em { font-style: normal; color: transparent; -webkit-text-stroke: 1px rgba(243,239,229,.7); }
@@ -981,19 +1005,6 @@ a { color: inherit; }
   .minimap-head .mono:last-child { display: none; }
   #minimap { height: 72px; }
   .minimap-foot { display: none; }
-  .touch-controls { display: flex; position: absolute; left: 12px; right: 12px; bottom: 120px; justify-content: space-between; align-items: flex-end; pointer-events: none; }
-  .touch-steer, .touch-pedals { display: flex; gap: 10px; pointer-events: auto; }
-  .touch-controls button {
-    width: 66px; height: 66px; border-radius: 50%;
-    border: 1px solid rgba(255,255,255,.2);
-    background: rgba(12,14,18,.58); backdrop-filter: blur(8px);
-    font-family: var(--font-display); font-weight: 600; font-size: 11px; letter-spacing: .08em;
-    display: grid; place-items: center; touch-action: none; user-select: none;
-    color: var(--cream);
-  }
-  .touch-controls button svg { width: 24px; height: 24px; }
-  .touch-controls button:active, .touch-controls button.is-down { background: var(--orange); color: #120b08; border-color: transparent; }
-  .tap-gas { width: 74px !important; height: 74px !important; background: rgba(255,77,31,.22) !important; border-color: rgba(255,77,31,.55) !important; }
   .race-message { top: 27%; font-size: 30px; }
   .off-track { top: 27%; }
   .modal { padding: 24px 22px; }
@@ -1034,6 +1045,100 @@ a { color: inherit; }
   #minimap { height: 60px; }
   .touch-controls button { width: 58px; height: 58px; }
   .tap-gas { width: 66px !important; height: 66px !important; }
+}
+
+@media (pointer: coarse) {
+  .touch-controls { display: flex; }
+  .controls-hint { display: none; }
+}
+
+/* Landscape phones and other short touch screens: keep the controls reachable
+   without letting the HUD and pedals fight for the same corner. */
+@media (pointer: coarse) and (max-height: 520px) {
+  .minimap-panel { display: none; }
+  /* Centre the compact gauge so both bottom corners stay free for thumbs. */
+  .hud-bottom { left: 50%; right: auto; bottom: 6px; transform: translateX(-50%); }
+  .speedo { width: 170px; height: 96px; padding: 6px; background: rgba(10,12,16,.55); }
+  .speedo-arc { left: 8px; top: 8px; width: 150px; height: 84px; }
+  .speedo-readout { left: 28px; top: 34px; width: 110px; }
+  .speedo-readout strong { font-size: 36px; }
+  .speedo-readout .mono { margin-top: 2px; font-size: 6px; }
+  .gear-box { right: 8px; bottom: 8px; }
+  .gear-box strong { font-size: 15px; }
+  .throttle-strip { display: none; }
+  .touch-controls {
+    left: 12px; right: 12px; bottom: 14px; width: auto;
+    justify-content: space-between; gap: 16px;
+  }
+  .touch-controls button { width: 58px; height: 58px; }
+  .tap-gas { width: 66px !important; height: 66px !important; }
+}
+
+@media (pointer: coarse) and (max-height: 520px) and (max-width: 560px) {
+  .speedo { width: 142px; height: 84px; }
+  .speedo-arc { left: 4px; top: 6px; width: 128px; height: 72px; }
+  .speedo-readout { left: 22px; top: 30px; width: 94px; }
+  .speedo-readout strong { font-size: 31px; }
+  .touch-controls button { width: 52px; height: 52px; }
+  .tap-gas { width: 58px !important; height: 58px !important; }
+}
+
+/* Tablets use the full-size HUD, so keep the touch pads above the gauge and
+   sector map rather than letting them sit on top of those panels. */
+@media (pointer: coarse) and (min-width: 761px) and (min-height: 521px) {
+  .touch-controls { bottom: 220px; }
+}
+
+/* Short viewports: the menu must never hide its primary actions. */
+@media (max-height: 560px) {
+  #screen-menu { overflow-y: auto; padding-top: 12px; padding-bottom: 10px; scrollbar-width: none; }
+  #screen-menu::-webkit-scrollbar { display: none; }
+  .menu-content { padding: 0; gap: 12px; }
+  .menu-card, .menu-meta, .menu-bottom, .lede { display: none; }
+  .menu-copy h1 { font-size: clamp(46px, 14vh, 96px); margin: 10px 0; line-height: .8; }
+  .menu-copy h1 em::after { right: -16px; bottom: .12em; width: 9px; height: 9px; }
+  .menu-actions .btn-lg { min-height: 46px; padding: 10px 20px; font-size: 15px; }
+  .menu-actions .btn-primary { padding-right: 48px; }
+  .menu-actions .btn-ghost small { display: none; }
+  .menu-actions .btn svg { width: 17px; height: 17px; }
+  .modal { padding: 18px 22px 16px; }
+  .modal-kicker { margin-bottom: 9px; }
+  .modal h2 { font-size: clamp(32px, 9vh, 44px); margin-bottom: 12px; }
+  .pause-stats { margin-bottom: 13px; }
+  .pause-stats > div { padding: 9px 0; }
+  .pause-stats strong { font-size: 21px; }
+  .modal-actions { gap: 6px; }
+  .modal-actions .btn { min-height: 38px; }
+  .modal-small { margin-top: 9px; }
+
+  /* Short screens: keep the full classification and both actions visible
+     without turning the results sheet into a scavenger hunt. */
+  .results-modal { padding: 12px 20px 14px; width: min(760px, 96vw); }
+  .results-topline { display: none; }
+  .results-hero { gap: 14px; padding: 3px 0 6px; }
+  .results-place { padding-right: 14px; }
+  .results-place span { font-size: 44px; }
+  .results-place small { margin-top: 3px; font-size: 6px; }
+  .results-copy .eyebrow { display: none; }
+  .results-copy h2 { margin: 0; font-size: 25px; }
+  .results-copy p { display: none; }
+  .results-grid .result-stat { padding: 5px 8px 6px 0; }
+  .results-grid .result-stat + .result-stat { padding-left: 10px; }
+  .results-grid .result-stat span { font-size: 6px; margin-bottom: 1px; }
+  .results-grid .result-stat strong { font-size: 17px; }
+  .results-grid .result-stat strong small { font-size: 8px; }
+  /* Reclaim the two-row stat/action stacks used by narrow portrait rules. */
+  .results-grid { grid-template-columns: repeat(4, 1fr); }
+  .results-grid .result-stat:nth-child(3) { border-left: 1px solid var(--line-soft); border-top: 0; }
+  .results-grid .result-stat:nth-child(4) { border-top: 0; }
+  .results-actions { flex-direction: row; gap: 8px; }
+  .results-table { margin: 6px 0 8px; }
+  .results-table .results-row { padding: 3px 6px; font-size: 9px; }
+  .results-table .results-row.head { padding-bottom: 4px; }
+  .results-table .results-row .r-name { font-size: 11px; }
+  .results-table .results-row .r-lap,
+  .results-table .results-row .r-time { font-size: 8px; }
+  .results-actions .btn { min-height: 32px; padding: 6px 12px; font-size: 10px; }
 }
 
 @media (hover: hover) and (pointer: fine) {

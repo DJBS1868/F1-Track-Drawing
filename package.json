@@ -4,6 +4,7 @@
   "description": "Create something awesome. Open the project, try it, and make it your own.",
   "main": "index.js",
   "scripts": {
+    "start": "node server.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

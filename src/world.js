@@ -912,6 +912,12 @@ export function createShowroom(car) {
 
   scene.add(new THREE.HemisphereLight(0x65758c, 0x090a0c, 0.55));
 
+  // Portrait viewports pull the camera much further back to fit the car above
+  // the workshop dock. Add a soft camera-side fill that only switches on for
+  // those layouts so the livery stays readable instead of falling into shadow.
+  const portraitFill = new THREE.HemisphereLight(0xffe6d5, 0x20242a, 0);
+  scene.add(portraitFill);
+
   const key = new THREE.SpotLight(0xffe0bd, 260, 40, 0.52, 0.55, 1.6);
   key.position.set(6, 9, 7);
   key.target.position.set(1.6, 0.4, 0);
@@ -1063,6 +1069,7 @@ export function createShowroom(car) {
     get orbitAngle() { return manualAngle; },
     update(t, dt) {
       const portrait = camera.aspect < 0.85;
+      portraitFill.intensity = portrait ? 1.35 : 0;
       if (mode === 'garage') {
         if (!hasInteracted) autoAngle += dt * 0.18;
         if (!dragging && spinVelocity) {

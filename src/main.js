@@ -804,6 +804,8 @@ const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 async function beginBuild(rawPoints, { instant = false } = {}) {
   if (building) return;
   building = true;
+  clearTimeout(toastTimer);
+  dom.toast.classList.remove('show');
   audio.ensure();
   audio.click(520);
   const trackData = createTrackData(rawPoints, { targetLength: 1900, halfWidth: 7.2 });
@@ -2649,6 +2651,8 @@ function showResults() {
       <span class="r-time">${time}</span>
     </div>`;
   }).join('');
+  clearTimeout(toastTimer);
+  dom.toast.classList.remove('show');
   showModal(dom.results, true);
   race.resultsShown = true;
   audio.setPaused(true);

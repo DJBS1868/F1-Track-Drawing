@@ -157,6 +157,47 @@ function polygonArea(points) {
   return Math.abs(a) * 0.5;
 }
 
+/* Count corner groups cyclically. Starting on a non-corner sample keeps a
+   corner that crosses the start/finish seam from being counted twice. */
+function measureTurns(curvature, step, threshold) {
+  const n = curvature.length;
+  if (!n) return { turns: 0, longest: 0 };
+  const gapMax = Math.max(1, Math.round(14 / step));
+  let start = -1;
+  for (let i = 0; i < n; i++) {
+    if (curvature[i] <= threshold) { start = i; break; }
+  }
+  // The whole lap is one continuous bend.
+  if (start < 0) return { turns: 1, longest: 0 };
+
+  let turns = 0;
+  let inTurn = false;
+  let gap = 0;
+  let straightBest = 0;
+  let straightRun = 0;
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (curvature[i] > threshold) {
+      if (!inTurn) { turns++; inTurn = true; }
+      gap = 0;
+      straightRun = 0;
+    } else {
+      if (inTurn) {
+        gap++;
+        if (gap > gapMax) { inTurn = false; gap = 0; }
+      }
+      straightRun += step;
+      if (straightRun > straightBest) straightBest = straightRun;
+    }
+  }
+  return { turns, longest: straightBest };
+}
+
+function curvaturePercentile(curvature, p) {
+  const sorted = [...curvature].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))];
+}
+
 export function analyzePreview(rawPoints, opts = {}) {
   const prepared = prepareLoop(rawPoints);
   const rawLength = polylineLength(prepared);
@@ -173,12 +214,6 @@ export function analyzePreview(rawPoints, opts = {}) {
   const sampleCount = Math.max(260, Math.min(900, Math.round(rawLength / 2)));
   const uniform = resampleClosedUniform(world, sampleCount);
   const step = targetLength / sampleCount;
-  let turns = 0;
-  let straightBest = 0;
-  let straightRun = 0;
-  let inTurn = false;
-  let gap = 0;
-  let minRadius = Infinity;
 
   // curvature from heading change over 3 steps
   const curv = [];
@@ -201,33 +236,24 @@ export function analyzePreview(rawPoints, opts = {}) {
     for (let k = -win; k <= win; k++) sum += curv[(i + k + sampleCount) % sampleCount];
     sm.push(sum / (win * 2 + 1));
   }
+
+  // Technical tracks keep the precise 1/100 m corner detector. Smooth loops
+  // (ovals, circles, flowing sketches) fall back to a lower relative threshold
+  // so they still report meaningful corner and straight figures.
   const cornerThreshold = 1 / 100;
-  for (let i = 0; i < sampleCount; i++) {
-    const isTurn = sm[i] > cornerThreshold;
-    if (isTurn) {
-      if (!inTurn) { turns++; inTurn = true; }
-      gap = 0;
-      minRadius = Math.min(minRadius, 1 / Math.max(sm[i], 1e-5));
-    } else if (inTurn) {
-      gap++;
-      if (gap > 7) { inTurn = false; gap = 0; }
-    }
+  const base = measureTurns(sm, step, cornerThreshold);
+  const smoothThreshold = Math.max(1 / 340, curvaturePercentile(sm, 0.75) * 0.8);
+  const smooth = measureTurns(sm, step, smoothThreshold);
+  let turns = Math.max(base.turns, smooth.turns);
+  let straightBest = base.turns >= 3 ? base.longest : smooth.longest;
+  if (smooth.turns === 0) {
+    turns = Math.max(1, turns);
+    straightBest = 0;
   }
 
-  // Measure the longest straight cyclically so a straight crossing the
-  // start/finish seam is not split in half.
-  let scan = 0;
-  while (scan < sampleCount && sm[scan] <= cornerThreshold) scan++;
-  if (scan >= sampleCount) {
-    straightBest = targetLength;
-  } else {
-    for (let k = 1; k <= sampleCount; k++) {
-      const i = (scan + k) % sampleCount;
-      if (sm[i] <= cornerThreshold) {
-        straightRun += step;
-        if (straightRun > straightBest) straightBest = straightRun;
-      } else straightRun = 0;
-    }
+  let minRadius = Infinity;
+  for (let i = 0; i < sampleCount; i++) {
+    minRadius = Math.min(minRadius, 1 / Math.max(sm[i], 1e-5));
   }
 
   const closed = prepared.length > 3;
@@ -632,21 +658,20 @@ export function createTrackData(rawPoints, opts = {}) {
   // corners / kerbs / straights
   const cornerFlags = new Uint8Array(N);
   const cornerThreshold = 1 / 110;
+  const cornerGap = Math.round(14 / step);
   let inTurn = false;
   let gap = 0;
-  let turns = 0;
   for (let i = 0; i < N; i++) {
     const idx = i;
     const isTurn = Math.abs(K[idx]) > cornerThreshold;
     if (isTurn) {
-      if (!inTurn) turns++;
       inTurn = true;
       gap = 0;
     } else if (inTurn) {
       gap++;
-      if (gap > Math.round(14 / step)) { inTurn = false; gap = 0; }
+      if (gap > cornerGap) { inTurn = false; gap = 0; }
     }
-    if (inTurn || gap < Math.round(14 / step)) cornerFlags[idx] = 1;
+    if (inTurn || gap < cornerGap) cornerFlags[idx] = 1;
   }
   // dilate corner zones for kerbs and run-off
   const dilate = Math.round(20 / step);
@@ -656,19 +681,15 @@ export function createTrackData(rawPoints, opts = {}) {
     for (let k = -dilate; k <= dilate; k++) kerbFlags[(i + k + N) % N] = 1;
   }
 
-  let straightBest = 0;
-  let straightStart = 0;
-  while (straightStart < N && Math.abs(K[straightStart]) >= 1 / 260) straightStart++;
-  if (straightStart < N) {
-    let straightRun = 0;
-    for (let k = 1; k <= N; k++) {
-      const i = (straightStart + k) % N;
-      if (Math.abs(K[i]) < 1 / 260) {
-        straightRun += step;
-        if (straightRun > straightBest) straightBest = straightRun;
-      } else straightRun = 0;
-    }
-  }
+  const absK = new Float32Array(N);
+  for (let i = 0; i < N; i++) absK[i] = Math.abs(K[i]);
+  const baseTurns = measureTurns(absK, step, 1 / 110);
+  const smoothThreshold = Math.max(1 / 340, curvaturePercentile(absK, 0.75) * 0.8);
+  const smoothTurns = measureTurns(absK, step, smoothThreshold);
+  const turns = Math.max(baseTurns.turns, smoothTurns.turns, 1);
+  const straightBest = baseTurns.turns >= 3
+    ? baseTurns.longest
+    : (smoothTurns.turns === 0 ? 0 : smoothTurns.longest);
 
   // AI speed profile
   const profile = new Float32Array(N);
