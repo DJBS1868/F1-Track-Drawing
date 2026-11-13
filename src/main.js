@@ -53,7 +53,11 @@ const dom = {
   garageSwatches: $('garage-swatches'), garageColorWheel: $('garage-color-wheel'),
   garageHexForm: $('garage-hex-form'), garageHex: $('garage-hex'), garageReset: $('garage-reset'),
   garageLiveDot: $('garage-live-dot'), garageLiveHex: $('garage-live-hex'),
-  garageLiveName: $('garage-live-name'), garageHint: $('garage-hint'),
+  garageLiveName: $('garage-live-name'), garageLivePart: $('garage-live-part'),
+  garageHint: $('garage-hint'), garagePresetLabel: $('garage-preset-label'),
+  garageCustomLabel: $('garage-custom-label'), garageParts: $('garage-parts'),
+  garageStickerTargets: $('garage-sticker-targets'), garageStickers: $('garage-stickers'),
+  garageStickerClear: $('garage-sticker-clear'),
   soundButtons: [$('btn-sound-menu'), $('btn-sound-draw'), $('btn-sound-garage')],
   difficultyButtons: [...document.querySelectorAll('#difficulty button')]
 };
@@ -101,6 +105,41 @@ const GARAGE_PRESETS = [
   { name: 'MIDNIGHT', hex: '#17191C' }
 ];
 
+const LIVERY_PARTS = [
+  { id: 'body', label: 'BODY' },
+  { id: 'frontWing', label: 'FRONT WING' },
+  { id: 'rearWing', label: 'REAR WING' },
+  { id: 'trim', label: 'TRIM' },
+  { id: 'helmet', label: 'HELMET' },
+  { id: 'wheels', label: 'WHEELS' }
+];
+
+const STICKER_SLOTS = [
+  { id: 'nose', label: 'NOSE' },
+  { id: 'side', label: 'SIDEPODS' },
+  { id: 'wing', label: 'REAR WING' }
+];
+
+const STICKER_CHOICES = [
+  { id: 'number', label: '07' },
+  { id: 'apex', label: 'APEX' },
+  { id: 'stripe', label: 'STRIPES' },
+  { id: 'bolt', label: 'BOLT' },
+  { id: 'star', label: 'STAR' },
+  { id: 'checker', label: 'CHECKER' },
+  { id: 'flame', label: 'FLAME' }
+];
+
+const FACTORY_LIVERY = {
+  body: FACTORY_PAINT,
+  frontWing: '#F3EFE5',
+  rearWing: '#F3EFE5',
+  trim: '#F3EFE5',
+  helmet: '#F3EFE5',
+  wheels: '#FF4D1F',
+  stickers: { nose: null, side: null, wing: null }
+};
+
 function normalizeHex(value, { allowShort = true } = {}) {
   if (typeof value !== 'string') return null;
   let hex = value.trim().replace(/^#/, '');
@@ -117,11 +156,49 @@ function paintName(hex) {
   return preset ? preset.name : 'CUSTOM PAINT';
 }
 
-let playerPaint = FACTORY_PAINT;
-try {
-  const savedPaint = normalizeHex(localStorage.getItem('apexink.paint') || '');
-  if (savedPaint) playerPaint = savedPaint;
-} catch {}
+function sanitizeLivery(raw) {
+  const livery = {
+    ...FACTORY_LIVERY,
+    stickers: { ...FACTORY_LIVERY.stickers }
+  };
+  if (!raw || typeof raw !== 'object') return livery;
+  for (const part of LIVERY_PARTS) {
+    const hex = normalizeHex(raw[part.id]);
+    if (hex) livery[part.id] = hex;
+  }
+  for (const slot of STICKER_SLOTS) {
+    const choice = raw.stickers?.[slot.id];
+    livery.stickers[slot.id] = STICKER_CHOICES.some((item) => item.id === choice) ? choice : null;
+  }
+  return livery;
+}
+
+function loadPlayerLivery() {
+  let raw = null;
+  try {
+    raw = JSON.parse(localStorage.getItem('apexink.livery') || 'null');
+  } catch {}
+  const livery = sanitizeLivery(raw);
+  if (!raw) {
+    try {
+      const legacy = normalizeHex(localStorage.getItem('apexink.paint') || '');
+      if (legacy) livery.body = legacy;
+    } catch {}
+  }
+  return livery;
+}
+
+function savePlayerLivery() {
+  try {
+    localStorage.setItem('apexink.livery', JSON.stringify(playerLivery));
+    localStorage.setItem('apexink.paint', playerLivery.body);
+  } catch {}
+}
+
+let playerLivery = loadPlayerLivery();
+let playerPaint = playerLivery.body;
+let selectedGaragePart = 'body';
+let selectedStickerSlot = 'nose';
 
 const RACE_SETUP_DEFAULTS = { laps: 3, ai: 3 };
 try {
@@ -446,7 +523,8 @@ function initDrawScreen() {
    ═══════════════════════════════════════════════════════════════════ */
 function initShowroom() {
   showroomCar = createCar({
-    paint: hexToInt(playerPaint), accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07'
+    paint: hexToInt(playerLivery.body), accent: 0xf3efe5, accent2: 0xff4d1f,
+    driver: 0xf3efe5, number: '07', livery: playerLivery
   });
   showroom = createShowroom(showroomCar);
   showroom.camera.aspect = window.innerWidth / window.innerHeight;
@@ -469,39 +547,140 @@ function enterMenu() {
 /* ═══════════════════════════════════════════════════════════════════
    Garage — player livery
    ═══════════════════════════════════════════════════════════════════ */
+function garagePart() {
+  return LIVERY_PARTS.find((part) => part.id === selectedGaragePart) || LIVERY_PARTS[0];
+}
+
+function applyLiveryToCar(car) {
+  if (!car) return;
+  for (const part of LIVERY_PARTS) car.setPart?.(part.id, playerLivery[part.id]);
+  car.setStickers?.(playerLivery.stickers);
+}
+
 function updateGarageUI() {
   if (!dom.garageLiveHex) return;
-  dom.garageLiveHex.textContent = playerPaint;
-  dom.garageLiveName.textContent = paintName(playerPaint);
-  dom.garageLiveDot.style.background = playerPaint;
-  dom.garageLiveDot.style.boxShadow = `0 0 22px ${playerPaint}`;
-  dom.garageColorWheel.value = playerPaint.toLowerCase();
-  if (document.activeElement !== dom.garageHex) dom.garageHex.value = playerPaint.slice(1);
+  const part = garagePart();
+  const color = playerLivery[part.id] || FACTORY_LIVERY[part.id];
+  const sticker = playerLivery.stickers[selectedStickerSlot];
+  const stickerChoice = STICKER_CHOICES.find((item) => item.id === sticker);
+  const stickerSlot = STICKER_SLOTS.find((slot) => slot.id === selectedStickerSlot);
+
+  dom.garageLivePart.textContent = `${part.label} COLOUR`;
+  dom.garageLiveHex.textContent = color;
+  dom.garageLiveName.textContent = paintName(color);
+  dom.garageLiveDot.style.background = color;
+  dom.garageLiveDot.style.boxShadow = `0 0 22px ${color}`;
+  dom.garageColorWheel.value = color.toLowerCase();
+  dom.garagePresetLabel.textContent = `${part.label} PRESETS`;
+  dom.garageCustomLabel.textContent = `CUSTOM ${part.label} COLOUR`;
+  dom.garageReset.textContent = `RESET ${part.label}`;
+  if (document.activeElement !== dom.garageHex) dom.garageHex.value = color.slice(1);
+
   for (const swatch of dom.garageSwatches?.children || []) {
-    const active = swatch.dataset.hex === playerPaint;
+    const active = swatch.dataset.hex === color;
     swatch.classList.toggle('is-active', active);
     swatch.setAttribute('aria-pressed', active ? 'true' : 'false');
   }
+
+  for (const button of dom.garageParts?.children || []) {
+    const active = button.dataset.part === selectedGaragePart;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+    const dot = button.querySelector('i');
+    if (dot) dot.style.background = playerLivery[button.dataset.part] || FACTORY_LIVERY[button.dataset.part];
+  }
+
+  for (const button of dom.garageStickerTargets?.children || []) {
+    const slot = STICKER_SLOTS.find((item) => item.id === button.dataset.slot);
+    if (!slot) continue;
+    const selected = slot.id === selectedStickerSlot;
+    const current = STICKER_CHOICES.find((item) => item.id === playerLivery.stickers[slot.id]);
+    button.textContent = current ? `${slot.label} · ${current.label}` : slot.label;
+    button.classList.toggle('is-active', selected);
+    button.classList.toggle('has-sticker', Boolean(current));
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+  }
+
+  for (const button of dom.garageStickers?.children || []) {
+    const active = button.dataset.sticker === sticker;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+
+  if (dom.garageStickerClear) {
+    dom.garageStickerClear.disabled = !stickerChoice;
+    dom.garageStickerClear.title = stickerChoice
+      ? `Remove ${stickerChoice.label} from the ${stickerSlot?.label || 'selected'} slot`
+      : 'No sticker in this slot';
+  }
 }
 
-function applyPlayerPaint(value, { persist = true, announce = false } = {}) {
+function applyGarageColor(value, { persist = true, announce = false } = {}) {
   const hex = normalizeHex(value);
   if (!hex) return false;
-  playerPaint = hex;
-  const paintInt = hexToInt(hex);
-  showroomCar?.setPaint(paintInt);
-  race?.playerCar?.setPaint(paintInt);
-  if (persist) {
-    try { localStorage.setItem('apexink.paint', hex); } catch {}
-  }
+  const part = garagePart();
+  playerLivery[part.id] = hex;
+  if (part.id === 'body') playerPaint = hex;
+  applyLiveryToCar(showroomCar);
+  applyLiveryToCar(race?.playerCar);
+  if (persist) savePlayerLivery();
   dom.garageHex?.classList.remove('is-invalid');
   if (dom.garageHint) dom.garageHint.textContent = 'ANY #RRGGBB VALUE ACCEPTED';
   updateGarageUI();
   if (announce) {
     audio.click(720);
-    toast(`LIVERY UPDATED · ${hex}`);
+    toast(`${part.label} UPDATED · ${hex}`);
   }
   return true;
+}
+
+function selectGaragePart(id) {
+  if (!LIVERY_PARTS.some((part) => part.id === id) || id === selectedGaragePart) return;
+  selectedGaragePart = id;
+  audio.ensure();
+  audio.click(560);
+  updateGarageUI();
+}
+
+function selectStickerSlot(id) {
+  if (!STICKER_SLOTS.some((slot) => slot.id === id)) return;
+  selectedStickerSlot = id;
+  audio.ensure();
+  audio.click(520);
+  updateGarageUI();
+}
+
+function applyGarageSticker(id) {
+  if (!STICKER_CHOICES.some((choice) => choice.id === id)) return;
+  const current = playerLivery.stickers[selectedStickerSlot];
+  playerLivery.stickers[selectedStickerSlot] = current === id ? null : id;
+  savePlayerLivery();
+  applyLiveryToCar(showroomCar);
+  applyLiveryToCar(race?.playerCar);
+  updateGarageUI();
+  const slot = STICKER_SLOTS.find((item) => item.id === selectedStickerSlot);
+  const choice = STICKER_CHOICES.find((item) => item.id === id);
+  audio.ensure();
+  audio.click(700);
+  toast(playerLivery.stickers[selectedStickerSlot]
+    ? `${choice.label} STUCK ON · ${slot?.label || 'CAR'}`
+    : `${choice.label} REMOVED · ${slot?.label || 'CAR'}`);
+}
+
+function buildGarageParts() {
+  if (!dom.garageParts) return;
+  dom.garageParts.replaceChildren();
+  for (const part of LIVERY_PARTS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'garage-part';
+    button.dataset.part = part.id;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', 'false');
+    button.innerHTML = `<i aria-hidden="true"></i><span>${part.label}</span>`;
+    button.addEventListener('click', () => selectGaragePart(part.id));
+    dom.garageParts.appendChild(button);
+  }
 }
 
 function buildGarageSwatches() {
@@ -519,10 +698,42 @@ function buildGarageSwatches() {
     swatch.innerHTML = '<span aria-hidden="true"></span>';
     swatch.addEventListener('click', () => {
       audio.ensure();
-      applyPlayerPaint(preset.hex, { announce: true });
+      applyGarageColor(preset.hex, { announce: true });
     });
     dom.garageSwatches.appendChild(swatch);
   });
+  updateGarageUI();
+}
+
+function buildGarageStickers() {
+  if (dom.garageStickerTargets) {
+    dom.garageStickerTargets.replaceChildren();
+    for (const slot of STICKER_SLOTS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'garage-sticker-target';
+      button.dataset.slot = slot.id;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', 'false');
+      button.textContent = slot.label;
+      button.addEventListener('click', () => selectStickerSlot(slot.id));
+      dom.garageStickerTargets.appendChild(button);
+    }
+  }
+  if (dom.garageStickers) {
+    dom.garageStickers.replaceChildren();
+    for (const choice of STICKER_CHOICES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'garage-sticker-choice';
+      button.dataset.sticker = choice.id;
+      button.setAttribute('aria-pressed', 'false');
+      button.title = `Apply ${choice.label} sticker`;
+      button.textContent = choice.label;
+      button.addEventListener('click', () => applyGarageSticker(choice.id));
+      dom.garageStickers.appendChild(button);
+    }
+  }
   updateGarageUI();
 }
 
@@ -736,6 +947,7 @@ class SmokeSystem {
    ═══════════════════════════════════════════════════════════════════ */
 const GRID_GAP = 9.5;
 const GRID_FIRST = 9;
+const AI_LANES = [-3.05, 0, 3.05];
 
 function hideAllScreens() {
   for (const el of [dom.menu, dom.draw, dom.build, dom.garage]) el.classList.remove('is-active');
@@ -752,6 +964,18 @@ function gridPose(slot, lateral) {
   };
 }
 
+// Invisible timing gates spaced around the lap. They are never rendered: they
+// simply stop the nearest-point lookup from mistaking a nearby part of the
+// circuit for the part the player is actually racing on.
+function createRaceCheckpoints(track) {
+  const count = clamp(Math.round(track.length / 55), 20, 48);
+  const spacing = track.length / count;
+  return Array.from({ length: count }, (_, i) => {
+    const s = sampleAtDistance(track, i * spacing);
+    return { dist: i * spacing, x: s.x, z: s.z, tx: s.tx, tz: s.tz, nx: s.nx, nz: s.nz };
+  });
+}
+
 function enterRace(trackData) {
   if (race) {
     race.smoke?.dispose();
@@ -765,7 +989,8 @@ function enterRace(trackData) {
   const world = createRaceWorld(trackData);
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
   const playerCar = createCar({
-    paint: hexToInt(playerPaint), accent: 0xf3efe5, accent2: 0xff4d1f, driver: 0xf3efe5, number: '07', player: true
+    paint: hexToInt(playerLivery.body), accent: 0xf3efe5, accent2: 0xff4d1f,
+    driver: 0xf3efe5, number: '07', player: true, livery: playerLivery
   });
   world.scene.add(playerCar.root);
 
@@ -785,10 +1010,20 @@ function enterRace(trackData) {
       finishTime: null,
       history: [],
       phase: Math.random() * TAU,
-      lateral: i % 2 === 0 ? 2.9 : -2.9,
-      baseLateral: i % 2 === 0 ? 2.9 : -2.9
+      pace: 0.968 + Math.random() * 0.064,
+      form: 1,
+      formTarget: 1,
+      formTimer: 2 + Math.random() * 5,
+      lane: i % AI_LANES.length,
+      laneCooldown: 0,
+      startDelay: 0.15 + Math.random() * 0.6,
+      nerve: 0.72 + Math.random() * 0.4,
+      lateral: AI_LANES[i % AI_LANES.length]
     };
   });
+  // Reverse-grid the field by pace: the quickest drivers start at the back and
+  // have to race forward, which keeps the order moving instead of freezing.
+  ai.sort((a, b) => a.pace - b.pace);
 
   const smoke = new SmokeSystem(world.scene);
 
@@ -802,6 +1037,7 @@ function enterRace(trackData) {
     ai,
     smoke,
     locator: new TrackLocator(trackData, 18),
+    checkpoints: createRaceCheckpoints(trackData),
     map: null,
     state: 'countdown',
     time: 0,
@@ -819,7 +1055,8 @@ function enterRace(trackData) {
     player: {
       pos: { x: 0, z: 0 }, vel: { x: 0, z: 0 }, yaw: 0, steer: 0, throttle: 0, brake: 0,
       vLong: 0, vLat: 0, prevVLong: 0, yawRate: 0, offroad: false, offTimer: 0,
-      lapsCompleted: 0, lapStart: 0, prevS: 0, sNorm: 0, sectors: [false, false, false],
+      lapsCompleted: 0, lapStart: 0, sNorm: 0, lastIndex: 0,
+      progressDist: 0, cpNext: 0, cpArmed: false, sectors: [false, false, false],
       bestLap: null, lastLap: null, topSpeed: 0, finished: false, finishTime: null,
       finishPosition: setup.aiCount + 1, drs: false, trackDist: 0, assistState: 'auto', history: []
     }
@@ -866,8 +1103,12 @@ function resetRaceState() {
   p.drs = false; p.trackDist = 0;
   p.assistState = 'auto';
   p.history = [];
-  p.sNorm = ((r.locator.nearest(pose.x, pose.z).index % r.track.N) / r.track.N);
-  p.prevS = p.sNorm;
+  const startIndex = r.locator.nearest(pose.x, pose.z).index;
+  p.lastIndex = startIndex;
+  p.progressDist = -(GRID_FIRST + playerGridSlot * GRID_GAP);
+  p.cpNext = 0;
+  p.cpArmed = false;
+  p.sNorm = (startIndex % r.track.N) / r.track.N;
   r.camYaw = pose.yaw;
   r.shakeT = 0;
   r.impactShake = 0;
@@ -876,16 +1117,27 @@ function resetRaceState() {
   r.playerCar.setDRS(false);
   r.playerCar.setBrake(false);
 
+  // Fresh pace for the field each race, then reverse-grid the quickest cars so
+  // there is always someone carving through the pack.
+  for (const a of r.ai) a.pace = 0.968 + Math.random() * 0.064;
+  r.ai.sort((a, b) => a.pace - b.pace);
   r.ai.forEach((a, i) => {
-    const gp = gridPose(i, i % 2 === 0 ? 2.9 : -2.9);
+    a.lane = i % AI_LANES.length;
+    const lane = AI_LANES[a.lane];
+    const gp = gridPose(i, lane);
     a.dist = -(GRID_FIRST + i * GRID_GAP);
     a.speed = 0;
     a.finished = false;
     a.finishTime = null;
     a.history = [];
-    a.lateral = i % 2 === 0 ? 2.9 : -2.9;
-    a.baseLateral = a.lateral;
+    a.form = 1;
+    a.formTarget = 1;
+    a.formTimer = 2 + Math.random() * 5;
+    a.laneCooldown = 0;
+    a.startDelay = 0.15 + Math.random() * 0.6;
+    a.nerve = 0.72 + Math.random() * 0.4;
     a.phase = Math.random() * TAU;
+    a.lateral = lane;
     setCarPose(a.model, gp.x, gp.z, gp.yaw);
     a.model.body.rotation.set(0, 0, 0);
     a.model.setDRS(false);
@@ -1063,8 +1315,7 @@ function drawMinimap() {
 function playerProgress() {
   const p = race.player;
   if (p.finished) return race.totalLaps;
-  const s = p.sNorm;
-  return p.lapsCompleted + (p.lapsCompleted === 0 && s > 0.72 ? s - 1 : s);
+  return p.progressDist / race.track.length;
 }
 
 // Keep a short timeline of every car's race progress. Comparing the leader's
@@ -1323,8 +1574,9 @@ function updatePlayerPhysics(dt) {
   p.pos.x += p.vel.x * dt;
   p.pos.z += p.vel.z * dt;
 
-  const near = race.locator.nearest(p.pos.x, p.pos.z);
+  const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
   const sample = tr.samples[near.index];
+  p.lastIndex = near.index;
   p.sNorm = (near.index % tr.N) / tr.N;
   p.trackDist = near.dist;
   p.lastK = sample.k;
@@ -1383,9 +1635,51 @@ function updatePlayerVisual(dt) {
   }
 }
 
+function nearestTrackSample(track, x, z, hint = -1, windowMeters = 26) {
+  const N = track.N;
+  let best = -1;
+  let bestD = Infinity;
+  if (Number.isInteger(hint) && hint >= 0 && hint < N) {
+    const span = Math.max(6, Math.round(windowMeters / track.step));
+    for (let k = -span; k <= span; k++) {
+      const i = (hint + k + N) % N;
+      const s = track.samples[i];
+      const d = (s.x - x) ** 2 + (s.z - z) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    // If the car is well off the road (or has been recovered), fall back to the
+    // spatial lookup so it can always find its way back to the nearest asphalt.
+    if (best >= 0 && bestD > (track.halfWidth + 36) ** 2) {
+      const global = race.locator.nearest(x, z);
+      const d = global.dist * global.dist;
+      if (global.index >= 0 && d < bestD) { bestD = d; best = global.index; }
+    }
+  }
+  if (best < 0) {
+    const global = race.locator.nearest(x, z);
+    best = global.index >= 0 ? global.index : 0;
+    bestD = global.dist * global.dist;
+  }
+  return { index: best, dist: Math.sqrt(bestD) };
+}
+
+function trackDistanceAt(track, index, x, z) {
+  const s = track.samples[index];
+  const along = (x - s.x) * s.tx + (z - s.z) * s.tz;
+  return (s.s ?? index * track.step) + clamp(along, -track.step, track.step);
+}
+
+function unwrapTrackDistance(candidate, reference, length) {
+  let out = candidate;
+  const half = length * 0.5;
+  while (out - reference > half) out -= length;
+  while (out - reference < -half) out += length;
+  return out;
+}
+
 function recoverPlayer(showToast = true) {
   const p = race.player;
-  const near = race.locator.nearest(p.pos.x, p.pos.z);
+  const near = nearestTrackSample(race.track, p.pos.x, p.pos.z, p.lastIndex);
   const s = race.track.samples[near.index];
   p.pos = { x: s.x, z: s.z };
   p.vel = { x: 0, z: 0 };
@@ -1393,8 +1687,9 @@ function recoverPlayer(showToast = true) {
   p.yaw = Math.atan2(s.tx, s.tz);
   p.offroad = false;
   p.offTimer = 0;
+  p.lastIndex = near.index;
   p.sNorm = (near.index % race.track.N) / race.track.N;
-  p.prevS = p.sNorm;
+  p.progressDist = unwrapTrackDistance(trackDistanceAt(race.track, near.index, s.x, s.z), p.progressDist, race.track.length);
   race.locator.lastIndex = near.index;
   // Cut the camera with the car rather than letting it swoop across the
   // circuit to the recovery point.
@@ -1440,23 +1735,51 @@ function updatePlayerProgress(dt) {
   const p = race.player;
   if (p.finished) return;
   const tr = race.track;
-  const near = race.locator.nearest(p.pos.x, p.pos.z);
-  const s = tr.samples[near.index];
-  const forwardDot = p.vel.x * s.tx + p.vel.z * s.tz;
-  const sNorm = (near.index % tr.N) / tr.N;
+  const L = tr.length;
+  const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
+  const candidate = unwrapTrackDistance(
+    trackDistanceAt(tr, near.index, p.pos.x, p.pos.z),
+    p.progressDist,
+    L
+  );
 
-  if (forwardDot > 0.4 && sNorm < 0.9) {
-    if (sNorm > 0.13) p.sectors[0] = true;
-    if (sNorm > 0.38) p.sectors[1] = true;
-    if (sNorm > 0.64) p.sectors[2] = true;
+  // A car can only advance a sensible distance in one physics step. Clamping
+  // rejected huge jumps from nearby track sections while still letting the
+  // progress catch up after a recovery.
+  const allowed = Math.max(16, Math.abs(p.vLong) * Math.max(dt, 0.001) * 4 + 3);
+  const delta = candidate - p.progressDist;
+  p.progressDist += Math.abs(delta) <= allowed ? delta : clamp(delta, -allowed, allowed);
+  p.lastIndex = near.index;
+  p.trackDist = near.dist;
+  p.sNorm = (((p.progressDist % L) + L) % L) / L;
+
+  // Hidden checkpoints. The lap only counts after every gate has been crossed
+  // in order, which keeps the timing tower honest even on circuits that fold
+  // back alongside themselves.
+  const cpCount = race.checkpoints.length;
+  const cpSpacing = L / cpCount;
+  if (p.cpArmed) {
+    if (p.progressDist >= (p.lapsCompleted + 1) * L) {
+      p.cpArmed = false;
+      p.cpNext = 1;
+      completeLap();
+    }
+  } else {
+    const target = p.lapsCompleted * L + p.cpNext * cpSpacing;
+    if (p.progressDist >= target) {
+      if (p.cpNext >= cpCount - 1) {
+        p.cpArmed = true;
+        p.cpNext = 0;
+      } else {
+        p.cpNext++;
+      }
+    }
   }
 
-  const crossed = p.prevS > 0.82 && sNorm < 0.18 && forwardDot > 0;
-  if (crossed) {
-    if (p.sectors[0] && p.sectors[1] && p.sectors[2]) completeLap();
-    else p.sectors = [false, false, false];
-  }
-  p.prevS = sNorm;
+  const lapFrac = (((p.progressDist % L) + L) % L) / L;
+  if (lapFrac > 0.13) p.sectors[0] = true;
+  if (lapFrac > 0.38) p.sectors[1] = true;
+  if (lapFrac > 0.64) p.sectors[2] = true;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1608,17 +1931,97 @@ function resolveCarCollisions(dt = 1 / 60) {
   }
 }
 
+function findAiBlocker(a, ai) {
+  let blocker = null;
+  let gap = Infinity;
+  for (const b of ai) {
+    if (b === a || b.lane !== a.lane) continue;
+    const d = b.dist - a.dist;
+    if (d > 0.2 && d < gap && d < 45) { blocker = b; gap = d; }
+  }
+  return { blocker, gap };
+}
+
+function aiLaneClear(a, lane, ai) {
+  for (const b of ai) {
+    if (b === a || b.lane !== lane) continue;
+    const d = b.dist - a.dist;
+    if (d > -8 && d < 15) return false;
+  }
+  return true;
+}
+
 function updateAI(dt) {
   const tr = race.track;
   const L = tr.length;
   const diff = DIFFICULTY[diffLevel] || DIFFICULTY.pro;
-  for (const a of race.ai) {
+  const ai = race.ai;
+
+  // Decide who is stuck behind whom before anyone moves.
+  for (const a of ai) {
+    a.laneCooldown = Math.max(0, a.laneCooldown - dt);
+    a.formTimer -= dt;
+    if (a.formTimer <= 0) {
+      a.formTimer = 7 + Math.random() * 8;
+      a.formTarget = 0.985 + Math.random() * 0.03;
+    }
+    a.form = damp(a.form, a.formTarget, 0.55, dt);
+    const look = findAiBlocker(a, ai);
+    a.blocker = look.blocker;
+    a.blockerGap = look.gap;
+  }
+
+  // Faster cars look for a clear lane and go racing. The quickest drivers are
+  // prepared to commit from further back; the conservative ones wait a little.
+  for (const a of ai) {
+    const blocker = a.blocker;
+    if (!blocker || a.finished || a.laneCooldown > 0) continue;
+    const trigger = 11 + (a.nerve - 0.72) * 30;
+    if (a.blockerGap > trigger) continue;
+    const quicker = a.pace * a.form > blocker.pace * blocker.form * 0.999;
+    const aboutToHit = a.blockerGap < 6.5;
+    if (!quicker && !aboutToHit) continue;
+    const dirs = a.lane === 0 ? [1] : a.lane === AI_LANES.length - 1 ? [-1]
+      : (Math.random() < 0.5 ? [-1, 1] : [1, -1]);
+    for (const dir of dirs) {
+      const lane = a.lane + dir;
+      if (lane < 0 || lane >= AI_LANES.length) continue;
+      if (!aiLaneClear(a, lane, ai)) continue;
+      a.lane = lane;
+      a.laneCooldown = 1.2 + Math.random() * 1.4;
+      break;
+    }
+  }
+
+  for (const a of ai) {
     const norm = ((a.dist % L) + L) % L;
     const idx = Math.floor(norm / tr.step) % tr.N;
-    let target = tr.speedProfile[idx] * diff.factor;
-    if (a.finished) target *= 0.6;
+    const s = tr.samples[idx];
+    let target = tr.speedProfile[idx] * diff.factor * a.pace * a.form;
+    if (race.time < a.startDelay * 1000) target *= 0.35;
+    if (a.finished) target *= 0.55;
+
+    // Traffic awareness: hold a gap to the car directly ahead in this lane,
+    // and only squeeze past once a neighbouring lane is clear.
+    if (a.blocker && a.blocker.lane === a.lane && !a.finished) {
+      const gap = a.blocker.dist - a.dist;
+      const room = 6.5 + a.speed * 0.03;
+      if (gap > 0 && gap < room) {
+        // Sit just behind the car ahead instead of bumping it, while the lane
+        // logic looks for a way past.
+        target = Math.min(target, Math.max(8, a.blocker.speed * (0.975 + (gap / room) * 0.02)));
+      } else if (gap >= room && gap < room + 14) {
+        target = Math.min(target, a.blocker.speed + (gap - room) * 0.35);
+      }
+    }
+
+    // Small per-driver corner appetite: braver drivers carry a touch more pace
+    // through the fast stuff without turning every lap into a procession.
+    const cornerLoad = clamp(Math.abs(s.k) * 85, 0, 1);
+    target *= 1 + (a.nerve - 0.92) * cornerLoad * 0.018;
+
     if (a.speed < target) a.speed = Math.min(target, a.speed + diff.accel * dt);
-    else a.speed = Math.max(target, a.speed - 27 * dt);
+    else a.speed = Math.max(target, a.speed - 29 * dt);
     a.dist += a.speed * dt;
 
     if (!a.finished && a.dist >= race.totalLaps * L) {
@@ -1626,11 +2029,9 @@ function updateAI(dt) {
       a.finishTime = race.time;
     }
 
-    const s = sampleAtDistance(tr, a.dist);
-    // A shove from contact pushes the AI off line; it eases back over a couple
-    // of seconds instead of staying wide for the rest of the race.
-    a.lateral = damp(a.lateral, a.baseLateral ?? 0, 0.55, dt);
-    const lateral = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.85;
+    // A shove from contact pushes the AI off line; ease it back to its lane.
+    a.lateral = damp(a.lateral, AI_LANES[a.lane] ?? 0, 2.2, dt);
+    const lateral = a.lateral + Math.sin(a.dist / 44 + a.phase) * 0.32;
     const x = s.x + s.nx * lateral;
     const z = s.z + s.nz * lateral;
     const yaw = Math.atan2(s.tx, s.tz);
@@ -1643,8 +2044,9 @@ function updateAI(dt) {
       w.spin.rotation.x += (a.speed / w.radius) * dt;
       if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, steer, 10, dt);
     }
+    const braking = target < a.speed - 0.6 || (a.blocker && a.blockerGap < 6);
     a.model.setDRS(a.speed > 60 && Math.abs(s.k) < 1 / 420);
-    a.model.setBrake(false);
+    a.model.setBrake(braking);
   }
 }
 
@@ -2194,27 +2596,28 @@ function wireEvents() {
     enterMenu();
   });
   dom.garageColorWheel.addEventListener('input', () => {
-    applyPlayerPaint(dom.garageColorWheel.value, { persist: false });
+    applyGarageColor(dom.garageColorWheel.value, { persist: false });
   });
   dom.garageColorWheel.addEventListener('change', () => {
     audio.ensure();
-    applyPlayerPaint(dom.garageColorWheel.value, { announce: true });
+    applyGarageColor(dom.garageColorWheel.value, { announce: true });
   });
   dom.garageHex.addEventListener('input', () => {
     dom.garageHex.classList.remove('is-invalid');
     const raw = dom.garageHex.value.trim().replace(/^#/, '');
     if (raw.length === 6) {
       const hex = normalizeHex(raw);
-      if (hex) applyPlayerPaint(hex, { persist: false });
+      if (hex) applyGarageColor(hex, { persist: false });
     }
   });
   dom.garageHex.addEventListener('blur', () => {
     const hex = normalizeHex(dom.garageHex.value);
+    const current = playerLivery[selectedGaragePart] || FACTORY_LIVERY[selectedGaragePart];
     if (hex) {
-      applyPlayerPaint(hex);
+      applyGarageColor(hex);
       dom.garageHex.value = hex.slice(1);
     } else {
-      dom.garageHex.value = playerPaint.slice(1);
+      dom.garageHex.value = current.slice(1);
     }
     dom.garageHex.classList.remove('is-invalid');
   });
@@ -2231,10 +2634,28 @@ function wireEvents() {
     dom.garageHex.classList.remove('is-invalid');
     dom.garageHint.textContent = 'ANY #RRGGBB VALUE ACCEPTED';
     dom.garageHex.value = hex.slice(1);
-    applyPlayerPaint(hex, { announce: true });
+    applyGarageColor(hex, { announce: true });
   });
   dom.garageReset.addEventListener('click', () => {
-    applyPlayerPaint(FACTORY_PAINT, { announce: true });
+    const part = garagePart();
+    playerLivery[part.id] = FACTORY_LIVERY[part.id];
+    if (part.id === 'body') playerPaint = playerLivery[part.id];
+    savePlayerLivery();
+    applyLiveryToCar(showroomCar);
+    applyLiveryToCar(race?.playerCar);
+    updateGarageUI();
+    audio.click(520);
+    toast(`${part.label} RESET · FACTORY SPEC`);
+  });
+  dom.garageStickerClear?.addEventListener('click', () => {
+    if (!playerLivery.stickers[selectedStickerSlot]) return;
+    playerLivery.stickers[selectedStickerSlot] = null;
+    savePlayerLivery();
+    applyLiveryToCar(showroomCar);
+    applyLiveryToCar(race?.playerCar);
+    updateGarageUI();
+    audio.click(420);
+    toast('STICKER REMOVED');
   });
   dom.btnBackMenu.addEventListener('click', () => {
     drawScreen.stop();
@@ -2328,7 +2749,9 @@ function demoPoints(index = 0) {
 async function boot() {
   buildSpeedoTicks();
   initDifficultyUI();
+  buildGarageParts();
   buildGarageSwatches();
+  buildGarageStickers();
   initDrawScreen();
   refreshSoundUI();
   wireEvents();
@@ -2380,7 +2803,17 @@ async function boot() {
     pauseRace,
     resumeRace,
     restartRace,
-    setPaint: (hex) => applyPlayerPaint(hex),
+    setPaint: (hex) => {
+      const value = normalizeHex(hex);
+      if (!value) return false;
+      playerLivery.body = value;
+      playerPaint = value;
+      savePlayerLivery();
+      applyLiveryToCar(showroomCar);
+      applyLiveryToCar(race?.playerCar);
+      updateGarageUI();
+      return true;
+    },
     demoPoints,
     demoRace: (index = 0, opts = {}) => beginBuild(demoPoints(index), { instant: true, ...opts }),
     setDemoInput: (obj) => Object.assign(input, obj),

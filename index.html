@@ -109,7 +109,7 @@
       <div class="garage-live" aria-live="polite">
         <span class="garage-live-dot" id="garage-live-dot"></span>
         <div>
-          <span class="mono">CURRENT PAINT</span>
+          <span class="mono" id="garage-live-part">BODY COLOUR</span>
           <strong id="garage-live-hex">#C90D19</strong>
         </div>
         <span class="garage-live-name mono" id="garage-live-name">FACTORY RED</span>
@@ -121,13 +121,17 @@
         <span class="mono">LIVERY WORKSHOP</span>
         <span class="chip" id="garage-chip">CAR 07</span>
       </div>
+      <div class="garage-parts-row">
+        <span class="mono">PAINT PART</span>
+        <div id="garage-parts" class="garage-parts" role="tablist" aria-label="Car part to paint"></div>
+      </div>
       <div class="garage-dock-body">
         <div class="garage-presets">
-          <span class="mono">PRESET COLOURS</span>
-          <div id="garage-swatches" class="garage-swatches" role="group" aria-label="Preset car colours"></div>
+          <span class="mono" id="garage-preset-label">BODY PRESETS</span>
+          <div id="garage-swatches" class="garage-swatches" role="group" aria-label="Preset part colours"></div>
         </div>
         <div class="garage-custom">
-          <span class="mono">CUSTOM COLOUR</span>
+          <span class="mono" id="garage-custom-label">CUSTOM BODY COLOUR</span>
           <div class="garage-custom-row">
             <label class="garage-wheel" title="Open the colour wheel">
               <input type="color" id="garage-color-wheel" value="#c90d19" aria-label="Open colour wheel" />
@@ -139,8 +143,14 @@
               <input id="garage-hex" name="hex" type="text" maxlength="7" spellcheck="false" aria-label="Hex colour code" placeholder="C90D19" />
               <button class="btn btn-ghost btn-sm" type="submit">APPLY</button>
             </form>
-            <button class="link-btn garage-reset" id="garage-reset" type="button">FACTORY RED</button>
+            <button class="link-btn garage-reset" id="garage-reset" type="button">RESET BODY</button>
           </div>
+        </div>
+        <div class="garage-stickers-panel">
+          <span class="mono">STICKER BAY</span>
+          <div id="garage-sticker-targets" class="garage-sticker-targets" role="tablist" aria-label="Sticker position"></div>
+          <div id="garage-stickers" class="garage-stickers" role="group" aria-label="Sticker designs"></div>
+          <button class="link-btn garage-sticker-clear" id="garage-sticker-clear" type="button" disabled>REMOVE STICKER</button>
         </div>
       </div>
       <div class="garage-dock-foot">

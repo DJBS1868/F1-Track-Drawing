@@ -95,6 +95,121 @@ function makeTextPlane(w, h, text, { color = '#f7f2e7', bg = null, font = '700 7
   return mesh;
 }
 
+function readableInk(value) {
+  const c = new THREE.Color(value);
+  const luma = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+  return luma > 0.52 ? '#101114' : '#f3efe5';
+}
+
+function drawStarPath(ctx, cx, cy, outer, inner, points = 5) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const angle = -Math.PI / 2 + (i / (points * 2)) * TAU;
+    const radius = i % 2 === 0 ? outer : inner;
+    const x = cx + Math.cos(angle) * radius;
+    const y = cy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+function makeStickerTexture(type, color) {
+  const canvas = makeTextCanvas(512, 256, (ctx, w, h) => {
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    switch (type) {
+      case 'number':
+        ctx.font = '700 190px Rajdhani, sans-serif';
+        ctx.fillText('07', w / 2, h / 2 + 8);
+        break;
+      case 'apex': {
+        ctx.font = '700 112px Rajdhani, sans-serif';
+        ctx.fillText('APEX', w / 2, h / 2 - 18);
+        ctx.font = '600 38px Rajdhani, sans-serif';
+        ctx.globalAlpha = 0.8;
+        ctx.fillText('I N K', w / 2, h / 2 + 64);
+        ctx.globalAlpha = 1;
+        break;
+      }
+      case 'stripe':
+        ctx.save();
+        ctx.translate(w / 2, h / 2);
+        ctx.rotate(-0.3);
+        for (let i = -1; i <= 1; i++) ctx.fillRect(-178, i * 42 - 9, 356, 18);
+        ctx.restore();
+        break;
+      case 'bolt': {
+        ctx.beginPath();
+        ctx.moveTo(285, 26);
+        ctx.lineTo(138, 144);
+        ctx.lineTo(242, 144);
+        ctx.lineTo(205, 230);
+        ctx.lineTo(374, 100);
+        ctx.lineTo(264, 100);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+      case 'star':
+        drawStarPath(ctx, w / 2, h / 2, 104, 45, 5);
+        ctx.fill();
+        break;
+      case 'checker': {
+        const size = 34;
+        const cols = 6;
+        const rows = 3;
+        const ox = w / 2 - (cols * size) / 2;
+        const oy = h / 2 - (rows * size) / 2;
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            if ((x + y) % 2 === 0) ctx.fillRect(ox + x * size, oy + y * size, size - 3, size - 3);
+          }
+        }
+        break;
+      }
+      case 'flame': {
+        ctx.beginPath();
+        ctx.moveTo(256, 28);
+        ctx.bezierCurveTo(350, 92, 352, 154, 306, 198);
+        ctx.bezierCurveTo(326, 150, 286, 132, 268, 174);
+        ctx.bezierCurveTo(252, 136, 210, 150, 218, 196);
+        ctx.bezierCurveTo(166, 152, 184, 90, 256, 28);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.beginPath();
+        ctx.moveTo(258, 132);
+        ctx.bezierCurveTo(292, 158, 288, 188, 258, 206);
+        ctx.bezierCurveTo(232, 180, 232, 156, 258, 132);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
+        break;
+      }
+      default:
+        break;
+    }
+  });
+  return canvasTexture(canvas);
+}
+
+function makeStickerPlane(w, h, type, color) {
+  const tex = makeStickerTexture(type, color);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  mesh.castShadow = false;
+  return mesh;
+}
+
 function makeWheel(front, accentMat) {
   const radius = front ? 0.355 : 0.395;
   const width = front ? 0.34 : 0.46;
@@ -104,7 +219,6 @@ function makeWheel(front, accentMat) {
 
   const rubber = new THREE.MeshStandardMaterial({ color: 0x0c0d0f, roughness: 0.92, metalness: 0.05 });
   const rimMat = new THREE.MeshStandardMaterial({ color: 0x2c2f34, roughness: 0.35, metalness: 0.9 });
-  const accent = new THREE.MeshStandardMaterial({ color: 0xff4d1f, emissive: 0x401005, emissiveIntensity: 0.5, roughness: 0.35, metalness: 0.3 });
 
   const tireGeo = new THREE.CylinderGeometry(radius, radius, width, 28, 1);
   tireGeo.rotateZ(Math.PI / 2);
@@ -114,7 +228,7 @@ function makeWheel(front, accentMat) {
 
   // sidewall rings
   for (const side of [-1, 1]) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.79, 0.012, 6, 32), accent);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.79, 0.012, 6, 32), accentMat);
     ring.rotation.y = Math.PI / 2;
     ring.position.x = side * (width / 2 + 0.004);
     spin.add(ring);
@@ -145,18 +259,36 @@ export function createCar({
   driver = 0xf3efe5,
   number = '07',
   showDecals = true,
-  player = false
+  player = false,
+  livery = null
 } = {}) {
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
 
   const paintMat = new THREE.MeshPhysicalMaterial({
-    color: paint, roughness: 0.3, metalness: 0.25,
+    color: livery?.body ?? paint, roughness: 0.3, metalness: 0.25,
     clearcoat: 1, clearcoatRoughness: 0.22
   });
+  const frontWingMat = new THREE.MeshPhysicalMaterial({
+    color: livery?.frontWing ?? accent, roughness: 0.32, metalness: 0.22,
+    clearcoat: 1, clearcoatRoughness: 0.24
+  });
+  const rearWingMat = new THREE.MeshPhysicalMaterial({
+    color: livery?.rearWing ?? accent, roughness: 0.32, metalness: 0.22,
+    clearcoat: 1, clearcoatRoughness: 0.24
+  });
   const accentMat = new THREE.MeshPhysicalMaterial({
-    color: accent, roughness: 0.34, metalness: 0.2, clearcoat: 0.8, clearcoatRoughness: 0.3
+    color: livery?.trim ?? accent, roughness: 0.34, metalness: 0.2,
+    clearcoat: 0.8, clearcoatRoughness: 0.3
+  });
+  const wheelMat = new THREE.MeshStandardMaterial({
+    color: livery?.wheels ?? accent2, roughness: 0.35, metalness: 0.35,
+    emissive: livery?.wheels ?? accent2, emissiveIntensity: 0.08
+  });
+  const helmetMat = new THREE.MeshPhysicalMaterial({
+    color: livery?.helmet ?? driver, roughness: 0.22, metalness: 0.15,
+    clearcoat: 1, clearcoatRoughness: 0.15
   });
   const hotMat = new THREE.MeshStandardMaterial({
     color: accent2, roughness: 0.35, metalness: 0.35,
@@ -168,6 +300,7 @@ export function createCar({
   const glassMat = new THREE.MeshPhysicalMaterial({
     color: 0x161b22, roughness: 0.08, metalness: 0.8, clearcoat: 1, transparent: true, opacity: 0.92
   });
+  const decalInk = readableInk(paintMat.color);
 
   /* ── monocoque ─────────────────────────────────────────────── */
   const sections = [
@@ -229,7 +362,7 @@ export function createCar({
 
     // sidepod decal
     if (showDecals) {
-      const decal = makeTextPlane(0.58, 0.14, `APEX ${number}`, { color: '#f5f0e6', font: '700 60px Rajdhani' });
+      const decal = makeTextPlane(0.58, 0.14, `APEX ${number}`, { color: decalInk, font: '700 60px Rajdhani' });
       decal.position.set(side * 0.902, 0.48, -0.38);
       decal.rotation.y = side * Math.PI / 2;
       body.add(decal);
@@ -252,13 +385,11 @@ export function createCar({
   haloPillar.rotation.x = 0.3;
   body.add(haloPillar);
 
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.17, 18, 14), new THREE.MeshPhysicalMaterial({
-    color: driver, roughness: 0.22, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.15
-  }));
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.17, 18, 14), helmetMat);
   helmet.position.set(0, 0.94, 0.14);
   helmet.scale.set(1, 1.05, 1.12);
   body.add(helmet);
-  const helmetStripe = new THREE.Mesh(new THREE.TorusGeometry(0.172, 0.028, 6, 20, Math.PI), new THREE.MeshStandardMaterial({ color: accent2, roughness: 0.4 }));
+  const helmetStripe = new THREE.Mesh(new THREE.TorusGeometry(0.172, 0.028, 6, 20, Math.PI), accentMat);
   helmetStripe.rotation.set(0, 0, Math.PI / 2);
   helmetStripe.position.set(0, 0.94, 0.14);
   body.add(helmetStripe);
@@ -300,12 +431,12 @@ export function createCar({
   body.add(spine);
 
   /* ── front wing ────────────────────────────────────────────── */
-  const wingMain = new THREE.Mesh(new THREE.BoxGeometry(1.96, 0.032, 0.56), accentMat);
+  const wingMain = new THREE.Mesh(new THREE.BoxGeometry(1.96, 0.032, 0.56), frontWingMat);
   wingMain.position.set(0, 0.14, 2.5);
   wingMain.rotation.x = -0.08;
   wingMain.castShadow = true;
   body.add(wingMain);
-  const wingFlap = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.03, 0.32), paintMat);
+  const wingFlap = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.03, 0.32), frontWingMat);
   wingFlap.position.set(0, 0.24, 2.32);
   wingFlap.rotation.x = 0.26;
   wingFlap.castShadow = true;
@@ -315,18 +446,18 @@ export function createCar({
   wingFlap2.rotation.x = 0.34;
   body.add(wingFlap2);
   for (const side of [-1, 1]) {
-    const endplate = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.36, 0.62), paintMat);
+    const endplate = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.36, 0.62), frontWingMat);
     endplate.position.set(side * 0.985, 0.22, 2.46);
     endplate.castShadow = true;
     body.add(endplate);
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.08, 0.62), hotMat);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.08, 0.62), accentMat);
     tip.position.set(side * 0.985, 0.4, 2.46);
     body.add(tip);
   }
 
   /* ── rear wing ─────────────────────────────────────────────── */
   for (const side of [-1, 1]) {
-    const endplate = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.56, 0.74), paintMat);
+    const endplate = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.56, 0.74), rearWingMat);
     endplate.position.set(side * 0.53, 1.0, -2.14);
     endplate.castShadow = true;
     body.add(endplate);
@@ -334,7 +465,7 @@ export function createCar({
     accent.position.set(side * 0.53, 1.0, -2.45);
     body.add(accent);
   }
-  const rearMain = new THREE.Mesh(new THREE.BoxGeometry(1.07, 0.04, 0.4), accentMat);
+  const rearMain = new THREE.Mesh(new THREE.BoxGeometry(1.07, 0.04, 0.4), rearWingMat);
   rearMain.position.set(0, 1.19, -2.12);
   rearMain.rotation.x = 0.12;
   rearMain.castShadow = true;
@@ -357,7 +488,7 @@ export function createCar({
   body.add(wingPylon);
 
   if (showDecals) {
-    const rearText = makeTextPlane(0.98, 0.19, 'APEX INK', { color: '#101114', font: '700 70px Rajdhani' });
+    const rearText = makeTextPlane(0.98, 0.19, 'APEX INK', { color: readableInk(rearWingMat.color), font: '700 70px Rajdhani' });
     rearText.position.set(0, 1.22, -2.335);
     rearText.rotation.y = Math.PI;
     body.add(rearText);
@@ -378,7 +509,7 @@ export function createCar({
     { x: 0.84, z: -1.56, front: false }
   ];
   for (const def of wheelDefs) {
-    const w = makeWheel(def.front, hotMat);
+    const w = makeWheel(def.front, wheelMat);
     w.steer.position.set(def.x, w.radius, def.z);
     w.front = def.front;
     w.x = def.x;
@@ -401,7 +532,7 @@ export function createCar({
 
   // number decal on the nose
   if (showDecals) {
-    const noseNo = makeTextPlane(0.38, 0.16, number, { color: '#f6f1e7', font: '700 96px Rajdhani' });
+    const noseNo = makeTextPlane(0.38, 0.16, number, { color: decalInk, font: '700 96px Rajdhani' });
     noseNo.position.set(0, 0.49, 1.28);
     noseNo.rotation.x = -Math.PI / 2 + 0.22;
     body.add(noseNo);
@@ -414,15 +545,73 @@ export function createCar({
     }
   });
 
+  const stickerGroup = new THREE.Group();
+  body.add(stickerGroup);
+
+  function clearStickers() {
+    for (const child of [...stickerGroup.children]) {
+      stickerGroup.remove(child);
+      child.geometry?.dispose();
+      if (child.material) {
+        child.material.map?.dispose();
+        child.material.dispose();
+      }
+    }
+  }
+
+  function setStickers(next = {}) {
+    clearStickers();
+    const ink = readableInk(paintMat.color);
+    if (next.nose) {
+      const p = makeStickerPlane(0.58, 0.29, next.nose, ink);
+      p.position.set(0, 0.565, 1.62);
+      p.rotation.x = -Math.PI / 2 + 0.24;
+      stickerGroup.add(p);
+    }
+    if (next.side) {
+      for (const side of [-1, 1]) {
+        const p = makeStickerPlane(0.68, 0.25, next.side, ink);
+        p.position.set(side * 0.888, 0.49, -0.72);
+        p.rotation.y = side * Math.PI / 2;
+        stickerGroup.add(p);
+      }
+    }
+    if (next.wing) {
+      const p = makeStickerPlane(0.82, 0.24, next.wing, ink);
+      p.position.set(0, 1.216, -2.11);
+      p.rotation.x = -Math.PI / 2 + 0.12;
+      stickerGroup.add(p);
+    }
+  }
+
+  const partMaterials = {
+    body: paintMat,
+    frontWing: frontWingMat,
+    rearWing: rearWingMat,
+    trim: accentMat,
+    helmet: helmetMat,
+    wheels: wheelMat
+  };
+
+  setStickers(livery?.stickers || {});
+
   return {
     root, body, wheels,
     brakeMat, drsGroup, drsFlap,
     get paint() { return paint; },
     player,
-    setPaint(value) {
-      paintMat.color.set(value);
-      paint = typeof value === 'number' ? value : paintMat.color.getHex();
+    setPart(part, value) {
+      const mat = partMaterials[part];
+      if (!mat) return false;
+      mat.color.set(value);
+      if (part === 'wheels') mat.emissive.set(value);
+      if (part === 'body') paint = mat.color.getHex();
+      return true;
     },
+    setPaint(value) {
+      this.setPart('body', value);
+    },
+    setStickers,
     setBrake(on) { brakeMat.emissiveIntensity = on ? 5 : 1.2; },
     setDRS(open) { drsGroup.rotation.x = open ? -0.55 : 0; },
     dispose() {
