@@ -658,6 +658,7 @@ a { color: inherit; }
 .lb-row .lb-col { width: 4px; height: 16px; background: var(--col, #888); border-radius: 1px; }
 .lb-row .lb-name { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: .08em; color: #d0d1d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lb-row .lb-gap { font-family: var(--font-mono); font-size: 10px; letter-spacing: .02em; color: #e2e3e5; text-align: right; font-variant-numeric: tabular-nums; }
+.lb-row .lb-gap.is-pit { color: #ffb257; letter-spacing: .1em; }
 .lb-row.is-leader .lb-pos { color: var(--cream); }
 .lb-row.is-leader .lb-gap { color: var(--dim); letter-spacing: .12em; font-size: 7.5px; }
 .lb-row.is-player { background: linear-gradient(90deg, rgba(255,77,31,.26), rgba(255,77,31,.08)); color: var(--cream); box-shadow: inset 2px 0 0 var(--orange); }

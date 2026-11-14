@@ -1045,7 +1045,10 @@ function enterRace(trackData) {
   }
 
   const setup = getRaceSetup();
-  const world = createRaceWorld(trackData);
+  const world = createRaceWorld(trackData, {
+    playerColor: hexToInt(playerLivery.body),
+    aiTeams: AI_TEAMS.map((team) => ({ name: team.name, number: team.number, paint: team.paint }))
+  });
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
   const playerCar = createCar({
     paint: hexToInt(playerLivery.body), accent: 0xf3efe5, accent2: 0xff4d1f,
@@ -1059,6 +1062,7 @@ function enterRace(trackData) {
       number: team.number, showDecals: true
     });
     world.scene.add(model.root);
+    const pitBox = world.pitBoxes.find((box) => box.team === team.name) || world.pitBoxes[0];
     return {
       name: team.name,
       color: `#${team.paint.toString(16).padStart(6, '0')}`,
@@ -1093,7 +1097,14 @@ function enterRace(trackData) {
       mistakeTime: 0,
       mistakeSide: 1,
       blocker: null,
-      blockerGap: Infinity
+      blockerGap: Infinity,
+      pitBox,
+      pit: {
+        phase: 'none', entryLap: 0, entryDist: 0,
+        routeProgress: 0, serviceTimer: 0, serviceDuration: 0,
+        stops: 0, speed: 0, x: 0, z: 0, yaw: 0, lateral: 0,
+        mergeSpeed: 0
+      }
     };
   });
   // Grid order is decided fresh in resetRaceState(), where pace is also drawn.
@@ -1274,6 +1285,27 @@ function resetRaceState() {
     a.mistakeTime = 0;
     a.blocker = null;
     a.blockerGap = Infinity;
+    // Every AI makes one stop, staggered around the player's call window. Short
+    // sprint races stay pit-stop free, exactly like the player's schedule.
+    const callAfter = r.pit.callAfterLaps;
+    const entryLap = r.totalLaps >= 3
+      ? clamp(callAfter + (i % 2), 1, r.totalLaps - 1)
+      : 0;
+    a.pit = {
+      phase: entryLap > 0 ? 'scheduled' : 'none',
+      entryLap,
+      entryDist: entryLap > 0 ? entryLap * r.track.length - (r.world.pitEntryLead ?? 190) : 0,
+      routeProgress: 0,
+      serviceTimer: 0,
+      serviceDuration: 2.5 + Math.random() * 1.5,
+      stops: 0,
+      speed: 0,
+      mergeSpeed: 0,
+      lateral: 0,
+      x: gp.x,
+      z: gp.z,
+      yaw: gp.yaw
+    };
     setCarPose(a.model, gp.x, gp.z, gp.yaw);
     a.model.body.rotation.set(0, 0, 0);
     a.model.setDRS(false);
@@ -1502,14 +1534,14 @@ function getStandings() {
   const playerP = playerProgress();
   const rows = [{
     name: 'YOU', color: playerPaint, progress: playerP, history: p.history,
-    speed: Math.abs(p.vLong), finishTime: p.finishTime,
+    speed: Math.abs(p.vLong), finishTime: p.finishTime, pitting: isPlayerInPitLane(),
     isPlayer: true, lap: Math.min(race.totalLaps, p.lapsCompleted + 1), finished: p.finished
   }];
   for (const a of race.ai) {
     const raw = a.dist / race.track.length;
     rows.push({
       name: a.name, color: a.color, progress: a.finished ? race.totalLaps : Math.min(race.totalLaps, raw),
-      history: a.history, speed: a.speed, finishTime: a.finishTime,
+      history: a.history, speed: a.speed, finishTime: a.finishTime, pitting: isAiInPitLane(a),
       isPlayer: false, lap: clamp(Math.floor(a.dist / race.track.length) + 1, 1, race.totalLaps),
       finished: a.finished
     });
@@ -1625,6 +1657,48 @@ function pitMetrics() {
   };
 }
 
+const PIT_LIMITER_SPEED = 24;
+const PIT_BOX_MERGE = 36;
+
+// Cars pull out of the through-lane and steer left towards their garage, then
+// merge back to the centre when they leave. The right side of the lane stays
+// clear for anyone running through to a box further down the pit lane.
+function pitLaneOffset(routeProgress, phase, boxRoute, entryLateral = 0) {
+  const boxOffset = race.world.pitBoxLateral ?? 3.6;
+  let offset = 0;
+  if (phase === 'driving-in' || phase === 'in') {
+    offset += entryLateral * (1 - smoothstep(0, 38, routeProgress));
+    const remaining = boxRoute - routeProgress;
+    if (remaining <= PIT_BOX_MERGE) {
+      offset += boxOffset * (1 - smoothstep(0, PIT_BOX_MERGE, Math.max(0, remaining)));
+    }
+  } else if (phase === 'driving-out' || phase === 'out') {
+    const travelled = Math.max(0, routeProgress - boxRoute);
+    offset += boxOffset * (1 - smoothstep(0, PIT_BOX_MERGE, travelled));
+  }
+  return offset;
+}
+
+function pitPathPoint(routeProgress, phase, boxRoute, entryLateral = 0) {
+  const route = race.world.pitRoute;
+  const maxDist = (route.length - 1) * 5;
+  const point = pitRoutePoint(clamp(routeProgress, 0, maxDist));
+  const nx = point.tz, nz = -point.tx;
+  const offset = pitLaneOffset(clamp(routeProgress, 0, maxDist), phase, boxRoute, entryLateral);
+  return { x: point.x + nx * offset, z: point.z + nz * offset, tx: point.tx, tz: point.tz };
+}
+
+function pitPathYaw(routeProgress, phase, boxRoute, entryLateral = 0) {
+  const route = race.world.pitRoute;
+  const maxDist = (route.length - 1) * 5;
+  const here = pitPathPoint(routeProgress, phase, boxRoute, entryLateral);
+  const ahead = pitPathPoint(Math.min(maxDist, routeProgress + 7), phase, boxRoute, entryLateral);
+  const dx = ahead.x - here.x;
+  const dz = ahead.z - here.z;
+  if (Math.hypot(dx, dz) < 1e-4) return Math.atan2(here.tx, here.tz);
+  return Math.atan2(dx, dz);
+}
+
 function updatePitPhysics(dt, p) {
   const pit = race.pit;
   const { routeLength, boxDistance } = pitMetrics();
@@ -1671,7 +1745,11 @@ function updatePitPhysics(dt, p) {
     ? Math.min(24, Math.sqrt(Math.max(0, remainingToBox) * 9.5) + 1.2)
     : Math.min(24, 9 + Math.sqrt(Math.max(0, remainingToExit) * 4.5));
   const speed = Math.max(0, p.vLong);
-  const look = pitRoutePoint(pit.routeProgress + clamp(9 + speed * 0.34, 10, 21));
+  const look = pitPathPoint(
+    pit.routeProgress + clamp(9 + speed * 0.34, 10, 21),
+    pit.phase,
+    boxDistance
+  );
   const heading = Math.atan2(look.x - p.pos.x, look.z - p.pos.z);
   const headingError = Math.atan2(Math.sin(heading - p.yaw), Math.cos(heading - p.yaw));
   const steer = clamp(headingError * 2.1, -1, 1);
@@ -2129,6 +2207,7 @@ function resolveCarCollisions(dt = 1 / 60) {
   fillCarCircles(p.pos.x, p.pos.z, p.yaw, playerCircles);
 
   for (const a of race.ai) {
+    if (isAiInPitLane(a)) continue;
     const ax = a.model.root.position.x;
     const az = a.model.root.position.z;
     const ayaw = a.model.root.rotation.y;
@@ -2342,6 +2421,98 @@ function separateAiCars(ai, limit) {
   }
 }
 
+function isAiInPitLane(a) {
+  return a.pit.phase === 'in' || a.pit.phase === 'service' || a.pit.phase === 'out';
+}
+
+function isPlayerInPitLane() {
+  const phase = race.pit.phase;
+  return phase === 'driving-in' || phase === 'servicing' || phase === 'driving-out';
+}
+
+function enterAiPit(a) {
+  const pit = a.pit;
+  const over = Math.max(0, a.dist - pit.entryDist);
+  pit.phase = 'in';
+  pit.routeProgress = Math.min(14, over);
+  pit.speed = Math.min(30, Math.max(0, a.speed));
+  pit.entryLateral = a.lateral || 0;
+  a.dist = pit.entryDist + pit.routeProgress;
+  a.blocker = null;
+  a.blockerGap = Infinity;
+}
+
+// AI pit lane procedure: brake for the limiter, turn left into the team's box,
+// stop for service, then merge back onto the through-lane and rejoin the track.
+function updateAiPit(dt, a) {
+  const pit = a.pit;
+  const box = a.pitBox;
+  const routeLength = race.world.pitRouteLength ?? 380;
+
+  if (pit.phase === 'in') {
+    const remaining = Math.max(0, box.routeProgress - pit.routeProgress);
+    const target = Math.min(PIT_LIMITER_SPEED, Math.sqrt(remaining * 9.5) + 1.2);
+    if (pit.speed < target) pit.speed = Math.min(target, pit.speed + 9 * dt);
+    else pit.speed = Math.max(target, pit.speed - 26 * dt);
+    pit.routeProgress = Math.min(box.routeProgress, pit.routeProgress + pit.speed * dt);
+    if (pit.routeProgress >= box.routeProgress - 0.35 && pit.speed <= 2.4) {
+      pit.routeProgress = box.routeProgress;
+      pit.speed = 0;
+      pit.phase = 'service';
+      pit.serviceTimer = pit.serviceDuration;
+    }
+  } else if (pit.phase === 'service') {
+    pit.speed = 0;
+    pit.serviceTimer = Math.max(0, pit.serviceTimer - dt);
+    if (pit.serviceTimer <= 0) {
+      pit.phase = 'out';
+      pit.stops++;
+      a.tyreStops = (a.tyreStops || 0) + 1;
+    }
+  } else if (pit.phase === 'out') {
+    const remaining = Math.max(0, routeLength - pit.routeProgress);
+    const target = Math.min(PIT_LIMITER_SPEED, 9 + Math.sqrt(remaining * 4.5));
+    if (pit.speed < target) pit.speed = Math.min(target, pit.speed + 8 * dt);
+    else pit.speed = Math.max(target, pit.speed - 20 * dt);
+    pit.routeProgress = Math.min(routeLength, pit.routeProgress + pit.speed * dt);
+    if (pit.routeProgress >= routeLength - 0.8) {
+      pit.routeProgress = routeLength;
+      pit.phase = 'done';
+      pit.speed = Math.min(PIT_LIMITER_SPEED, pit.speed);
+      a.dist = pit.entryDist + routeLength;
+      a.lateral = 0;
+      a.passLat = 0;
+      a.passSide = 0;
+      a.passUntil = 0;
+    }
+  }
+
+  a.dist = pit.entryDist + pit.routeProgress;
+  a.speed = pit.speed;
+
+  if (pit.phase === 'service') {
+    pit.x = box.x;
+    pit.z = box.z;
+    pit.yaw = box.yaw;
+    pit.steer = 0;
+  } else {
+    const here = pitPathPoint(pit.routeProgress, pit.phase === 'in' ? 'in' : 'out', box.routeProgress, pit.entryLateral || 0);
+    pit.x = here.x;
+    pit.z = here.z;
+    pit.yaw = pitPathYaw(pit.routeProgress, pit.phase === 'in' ? 'in' : 'out', box.routeProgress, pit.entryLateral || 0);
+    const lookYaw = pitPathYaw(
+      Math.min(routeLength, pit.routeProgress + 9),
+      pit.phase === 'in' ? 'in' : 'out',
+      box.routeProgress,
+      pit.entryLateral || 0
+    );
+    pit.steer = clamp(Math.atan2(Math.sin(lookYaw - pit.yaw), Math.cos(lookYaw - pit.yaw)) * 1.7, -0.5, 0.5);
+  }
+  a.lastX = pit.x;
+  a.lastZ = pit.z;
+  a.lastYaw = pit.yaw;
+}
+
 function updateAI(dt) {
   const tr = race.track;
   const L = tr.length;
@@ -2350,11 +2521,29 @@ function updateAI(dt) {
   const limit = aiTrackLimit();
   const now = race.time;
 
+  // Update pit schedules and the cars already in the lane before building the
+  // racing field. Cars in the pits must not act as blockers for cars on track.
+  for (const a of ai) {
+    const pit = a.pit;
+    if (pit.phase === 'scheduled' && pit.entryDist - a.dist < 170) {
+      pit.phase = 'approach';
+    }
+    if (pit.phase === 'approach' && a.dist >= pit.entryDist) {
+      enterAiPit(a);
+    }
+    if (isAiInPitLane(a)) {
+      updateAiPit(dt, a);
+      a.blocker = null;
+      a.blockerGap = Infinity;
+    }
+  }
+
+  const racingAi = ai.filter((a) => !isAiInPitLane(a));
   // Everyone races everyone, including the player. A single grid of rivals lets
   // the AI pick a side and actually fight for the place instead of following.
   const p = race.player;
-  const field = ai.slice();
-  if (!p.finished) {
+  const field = racingAi.slice();
+  if (!p.finished && !isPlayerInPitLane()) {
     field.push({
       isPlayer: true,
       name: 'YOU',
@@ -2367,7 +2556,7 @@ function updateAI(dt) {
 
   // Form and mistakes give each driver a rhythm across the race. Nobody is a
   // metronome, and a small error opens a real passing opportunity.
-  for (const a of ai) {
+  for (const a of racingAi) {
     a.formTimer -= dt;
     if (a.formTimer <= 0) {
       a.formTimer = 6 + Math.random() * 6;
@@ -2390,9 +2579,9 @@ function updateAI(dt) {
     a.blockerGap = look.gap;
   }
 
-  for (const a of ai) planAiOvertake(a, field, limit, tr);
+  for (const a of racingAi) planAiOvertake(a, field, limit, tr);
 
-  for (const a of ai) {
+  for (const a of racingAi) {
     const norm = ((a.dist % L) + L) % L;
     const idx = Math.floor(norm / tr.step) % tr.N;
     const s = tr.samples[idx];
@@ -2433,6 +2622,11 @@ function updateAI(dt) {
     } else if (a.blocker && latGap < 2.2 && a.blockerGap < 11 && !a.finished) {
       target = Math.min(target, a.blocker.speed + (a.blockerGap - 5) * 0.55);
     }
+    // Brake for the pit entry so the limiter engages at a believable speed.
+    if (a.pit.phase === 'approach' && !a.finished) {
+      const toEntry = Math.max(0, a.pit.entryDist - a.dist);
+      target = Math.min(target, Math.sqrt(PIT_LIMITER_SPEED * PIT_LIMITER_SPEED + 2 * 24 * toEntry));
+    }
     if (a.finished) target *= 0.5;
 
     if (a.speed < target) a.speed = Math.min(target, a.speed + diff.accel * a.launch * dt);
@@ -2466,9 +2660,23 @@ function updateAI(dt) {
     a.lateral = clamp(a.lateral, -limit, limit);
   }
 
-  separateAiCars(ai, limit);
+  separateAiCars(racingAi, limit);
 
   for (const a of ai) {
+    if (isAiInPitLane(a)) {
+      const pit = a.pit;
+      a.model.root.position.set(pit.x, 0, pit.z);
+      a.model.root.rotation.y = pit.yaw;
+      a.model.body.rotation.z = damp(a.model.body.rotation.z, 0, 6, dt);
+      a.model.body.rotation.x = 0;
+      for (const w of a.model.wheels) {
+        w.spin.rotation.x += (pit.speed / w.radius) * dt;
+        if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, pit.steer || 0, 10, dt);
+      }
+      a.model.setDRS(false);
+      a.model.setBrake(pit.phase === 'service' || pit.speed < 0.35);
+      continue;
+    }
     const s = sampleAtDistance(tr, a.dist);
     const x = s.x + s.nx * a.lateral;
     const z = s.z + s.nz * a.lateral;
@@ -2485,7 +2693,7 @@ function updateAI(dt) {
       w.spin.rotation.x += (a.speed / w.radius) * dt;
       if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, steer, 10, dt);
     }
-    const braking = a.speed > 1 && (a.blockerGap < 5.6 || Math.abs(s.k) > 1 / 95);
+    const braking = a.speed > 1 && (a.blockerGap < 5.6 || Math.abs(s.k) > 1 / 95 || a.pit.phase === 'approach');
     a.model.setDRS(a.speed > 58 && Math.abs(s.k) < 1 / 420);
     a.model.setBrake(braking);
   }
@@ -2612,12 +2820,12 @@ function updateHUD(dt) {
       const prev = race.gapShown[row.name];
       const shown = prev == null ? gapSec : prev + (gapSec - prev) * 0.5;
       race.gapShown[row.name] = shown;
-      const gap = i === 0 ? 'LEADER' : race.state === 'countdown' ? '—' : `+${shown.toFixed(3)}`;
+      const gap = row.pitting ? 'PIT' : i === 0 ? 'LEADER' : race.state === 'countdown' ? '—' : `+${shown.toFixed(3)}`;
       return `<div class="lb-row${row.isPlayer ? ' is-player' : ''}${i === 0 ? ' is-leader' : ''}">
         <span class="lb-pos">${i + 1}</span>
         <i class="lb-col" style="background:${row.color}"></i>
         <span class="lb-name">${row.name}</span>
-        <span class="lb-gap">${gap}</span>
+        <span class="lb-gap${row.pitting ? ' is-pit' : ''}">${gap}</span>
       </div>`;
     }).join('');
   }
