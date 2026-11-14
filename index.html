@@ -374,6 +374,74 @@
       <div class="pit-call-progress"><span id="pit-call-progress"></span></div>
     </div>
 
+    <div id="pit-mini" class="pit-mini" data-stage="remove" aria-hidden="true">
+      <button id="pit-mini-hit" class="pit-mini-hit" type="button">
+        <span class="pit-mini-visual">
+          <svg class="pit-mini-car" viewBox="0 0 180 250" aria-hidden="true">
+            <rect class="pit-mini-wing" x="38" y="24" width="104" height="9" rx="3"/>
+            <rect class="pit-mini-wing" x="30" y="214" width="120" height="12" rx="3"/>
+            <rect class="pit-mini-wing" x="24" y="205" width="10" height="31" rx="3"/>
+            <rect class="pit-mini-wing" x="146" y="205" width="10" height="31" rx="3"/>
+            <path class="pit-mini-body" d="M90 12 C98 30 101 48 101 63 L112 88 C119 105 121 129 119 152 C118 179 112 202 104 221 L76 221 C68 202 62 179 61 152 C59 129 61 105 68 88 L79 63 C79 48 82 30 90 12 Z"/>
+            <path class="pit-mini-stripe" d="M90 34 L95 72 L85 72 Z"/>
+            <ellipse class="pit-mini-cockpit" cx="90" cy="128" rx="14" ry="23"/>
+            <circle class="pit-mini-halo" cx="90" cy="114" r="19"/>
+            <path class="pit-mini-engine" d="M82 154 H98 L96 203 H84 Z"/>
+            <path class="pit-mini-nose" d="M86 60 H94 L92 88 H88 Z"/>
+
+            <g class="wheel-old">
+              <g class="pit-mini-wheel wheel-fl" style="--wx:-25px;--wy:-8px">
+                <rect x="27" y="68" width="23" height="42" rx="9"/>
+                <rect class="rim" x="34" y="76" width="9" height="26" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-fr" style="--wx:25px;--wy:-8px">
+                <rect x="130" y="68" width="23" height="42" rx="9"/>
+                <rect class="rim" x="137" y="76" width="9" height="26" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-rl" style="--wx:-25px;--wy:9px">
+                <rect x="22" y="166" width="27" height="48" rx="10"/>
+                <rect class="rim" x="30" y="175" width="11" height="30" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-rr" style="--wx:25px;--wy:9px">
+                <rect x="131" y="166" width="27" height="48" rx="10"/>
+                <rect class="rim" x="139" y="175" width="11" height="30" rx="4"/>
+              </g>
+            </g>
+
+            <g class="wheel-new">
+              <g class="pit-mini-wheel wheel-fl" style="--wx:-25px;--wy:-8px;--wd:0s">
+                <rect x="27" y="68" width="23" height="42" rx="9"/>
+                <rect class="rim" x="34" y="76" width="9" height="26" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-fr" style="--wx:25px;--wy:-8px;--wd:.04s">
+                <rect x="130" y="68" width="23" height="42" rx="9"/>
+                <rect class="rim" x="137" y="76" width="9" height="26" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-rl" style="--wx:-25px;--wy:9px;--wd:.08s">
+                <rect x="22" y="166" width="27" height="48" rx="10"/>
+                <rect class="rim" x="30" y="175" width="11" height="30" rx="4"/>
+              </g>
+              <g class="pit-mini-wheel wheel-rr" style="--wx:25px;--wy:9px;--wd:.12s">
+                <rect x="131" y="166" width="27" height="48" rx="10"/>
+                <rect class="rim" x="139" y="175" width="11" height="30" rx="4"/>
+              </g>
+            </g>
+          </svg>
+          <span class="pit-mini-tap" aria-hidden="true">TAP</span>
+        </span>
+        <span class="pit-mini-info">
+          <span class="pit-mini-top">
+            <span class="mono">PIT STOP · BOX 07</span>
+            <span class="mono" id="pit-mini-step">01 / 02</span>
+          </span>
+          <strong id="pit-mini-title">OLD TYRES</strong>
+          <small id="pit-mini-sub">TAP TO REMOVE THE WORN SET</small>
+          <span class="pit-mini-dots" aria-hidden="true"><i></i><i></i></span>
+          <span id="pit-mini-action" class="pit-mini-action">REMOVE TYRES <em>›</em></span>
+        </span>
+      </button>
+    </div>
+
     <div id="race-message" class="race-message"></div>
     <div id="off-track" class="off-track"><span>OFF TRACK</span><small>RETURN TO THE ASPHALT</small></div>
 

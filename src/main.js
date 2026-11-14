@@ -43,6 +43,8 @@ const dom = {
   raceMessage: $('race-message'), offTrack: $('off-track'),
   pitCall: $('pit-call'), pitCallMain: $('pit-call-main'), pitCallSub: $('pit-call-sub'),
   pitCallProgress: $('pit-call-progress'),
+  pitMini: $('pit-mini'), pitMiniHit: $('pit-mini-hit'), pitMiniStep: $('pit-mini-step'),
+  pitMiniTitle: $('pit-mini-title'), pitMiniSub: $('pit-mini-sub'), pitMiniAction: $('pit-mini-action'),
   countdown: $('countdown'), countdownValue: $('countdown-value'),
   controlsHint: $('controls-hint'), touchControls: $('touch-controls'),
   btnResume: $('btn-resume'), btnRestartRace: $('btn-restart-race'), btnNewTrack: $('btn-new-track'),
@@ -1122,7 +1124,7 @@ function enterRace(trackData) {
       routeProgress: 0,
       entryProgress: 0,
       serviceTimer: 0,
-      serviceDuration: 3.2,
+      serviceStage: null,
       stops: 0
     },
     world,
@@ -1199,8 +1201,10 @@ function resetRaceState() {
   r.pit.routeProgress = 0;
   r.pit.entryProgress = 0;
   r.pit.serviceTimer = 0;
+  r.pit.serviceStage = null;
   r.pit.stops = 0;
   hidePitCall();
+  hidePitMini();
   p.bestLap = readBest(r.track.seed);
   p.lastLap = null; p.topSpeed = 0;
   p.tyreLife = 1;
@@ -1357,6 +1361,8 @@ function resetRaceState() {
 function disposeRace() {
   if (!race) return;
   audio.stopRace();
+  hidePitMini();
+  hidePitCall();
   race.smoke?.dispose();
   race.world?.dispose();
   race.playerCar?.dispose();
@@ -1724,15 +1730,23 @@ function updatePitPhysics(dt, p) {
     p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
     p.throttle = 0; p.brake = 1; p.steer = 0;
     p.offroad = false; p.offTimer = 0;
-    pit.serviceTimer = Math.max(0, pit.serviceTimer - dt);
-    if (pit.serviceTimer <= 0) {
-      pit.phase = 'driving-out';
-      p.tyreLife = 1;
-      p.tyreStops = (p.tyreStops || 0) + 1;
-      pit.stops++;
-      showPitCall('NEW TYRES FITTED', 'FULL GRIP · REJOIN THE CIRCUIT', { kind: 'done' });
-      audio.radio();
-      audio.tone(820, 0.18, 0.06, 'triangle');
+    if (!pit.serviceStage) pit.serviceStage = 'remove';
+    // The stop is only released once both taps have been made. A short pause
+    // after fitting the new set lets the wheel animation land before the car
+    // pulls away.
+    if (pit.serviceStage === 'done') {
+      pit.serviceTimer = Math.max(0, pit.serviceTimer - dt);
+      if (pit.serviceTimer <= 0) {
+        pit.phase = 'driving-out';
+        pit.serviceStage = null;
+        p.tyreLife = 1;
+        p.tyreStops = (p.tyreStops || 0) + 1;
+        pit.stops++;
+        hidePitMini();
+        showPitCall('NEW TYRES FITTED', 'FULL GRIP · REJOIN THE CIRCUIT', { kind: 'done', ttl: 2200 });
+        audio.radio();
+        audio.tone(820, 0.18, 0.06, 'triangle');
+      }
     }
     return { active: true, locked: true };
   }
@@ -1752,8 +1766,11 @@ function updatePitPhysics(dt, p) {
   // and being teleported the last few metres.
   const approachSpeed = Math.min(24, Math.sqrt(Math.max(0, remainingToBox) * 9.5) + 1.2);
   const dockSpeed = Math.max(0, (distToBox - 0.08) * 0.85);
+  // Once the route itself has run out, no forward target is left. This stops
+  // the car even if it has drifted slightly past the painted centre.
+  const routeSpeed = Math.max(0, remainingToBox) * 1.35 + 0.35;
   const targetSpeed = pit.phase === 'driving-in'
-    ? (distToBox < 18 ? Math.min(8.5, dockSpeed) : approachSpeed)
+    ? Math.min(distToBox < 18 ? 8.5 : approachSpeed, dockSpeed, routeSpeed)
     : Math.min(24, 9 + Math.sqrt(Math.max(0, remainingToExit) * 4.5));
   const speed = Math.max(0, p.vLong);
   const look = pitPathPoint(
@@ -1766,7 +1783,10 @@ function updatePitPhysics(dt, p) {
   const steer = clamp(headingError * 2.1, -1, 1);
   pit.steerDemand = steer;
   pit.targetSpeed = targetSpeed;
-  pit.throttleDemand = clamp((targetSpeed - speed) * 0.2, 0, 0.85);
+  // A little feed-forward throttle keeps the car creeping the last metre
+  // instead of stalling short of the marks where rolling resistance wins.
+  const creep = targetSpeed > 0.12 ? 0.11 : 0;
+  pit.throttleDemand = clamp(creep + (targetSpeed - speed) * 0.2, 0, 0.85);
   pit.brakeDemand = speed > targetSpeed + 0.5
     ? clamp((speed - targetSpeed - 0.5) * 0.24, 0.14, 1)
     : 0;
@@ -1793,16 +1813,23 @@ function advancePitRoute(dt, p) {
 
   const box = race.world.playerPitBox;
   const dockDist = Math.hypot(p.pos.x - box.x, p.pos.z - box.z);
-  // A little tolerance: at walking pace the auto-throttle can settle a few
-  // centimetres short of the painted centre, and the stop must still trigger.
-  if (pit.phase === 'driving-in' && dockDist <= 0.45 && Math.abs(p.vLong) <= 0.3) {
+  // Dock on route arrival as well as on physical proximity. Previously a car
+  // that crept a few centimetres past the centre could keep rolling forever:
+  // route progress was pinned at the box while the body kept moving forward.
+  // Route distance is the authority now, and the body is snapped onto its
+  // marks as soon as the final approach is complete.
+  const routeArrived = pit.routeProgress >= boxDistance - 0.35;
+  const settledAtBox = dockDist <= 1.1 && Math.abs(p.vLong) <= 0.5;
+  if (pit.phase === 'driving-in' && (routeArrived || dockDist <= 0.55 || settledAtBox)) {
     pit.routeProgress = boxDistance;
     p.progressDist = pit.entryProgress + boxDistance;
     p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
     p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
     pit.phase = 'servicing';
-    pit.serviceTimer = pit.serviceDuration;
-    showPitCall('PIT STOP', 'NEW TYRES · SERVICE IN PROGRESS', { kind: 'service' });
+    pit.serviceStage = 'remove';
+    pit.serviceTimer = 0;
+    showPitMini();
+    showPitCall('PIT STOP', 'TAP TO CHANGE THE TYRES', { kind: 'service' });
     audio.tone(620, 0.12, 0.05, 'triangle');
   } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1) {
     pit.routeProgress = routeLength;
@@ -2780,12 +2807,67 @@ function hidePitCall() {
   dom.hud?.classList.remove('has-pit-call');
 }
 
+function showPitMini() {
+  if (!dom.pitMini) return;
+  const pit = race.pit;
+  pit.serviceStage = 'remove';
+  dom.pitMini.dataset.stage = 'remove';
+  dom.pitMini.style.setProperty('--pit-paint', playerLivery.body || '#ff4d1f');
+  dom.pitMini.classList.add('show');
+  dom.pitMini.setAttribute('aria-hidden', 'false');
+  dom.pitMiniStep.textContent = '01 / 02';
+  dom.pitMiniTitle.textContent = 'OLD TYRES';
+  dom.pitMiniSub.textContent = 'TAP TO REMOVE THE WORN SET';
+  dom.pitMiniAction.innerHTML = 'REMOVE TYRES <em>›</em>';
+  dom.hud?.classList.add('has-pit-mini');
+  // Drop any held touch controls before hiding them, otherwise a finger that
+  // was on the throttle when the car docked could stay latched down.
+  input.touchGas = false;
+  input.touchBrake = false;
+  input.touchLeft = false;
+  input.touchRight = false;
+  dom.touchControls?.querySelectorAll('.is-down').forEach((btn) => btn.classList.remove('is-down'));
+}
+
+function hidePitMini() {
+  dom.pitMini?.classList.remove('show');
+  dom.pitMini?.setAttribute('aria-hidden', 'true');
+  dom.hud?.classList.remove('has-pit-mini');
+}
+
+function advancePitMini() {
+  const pit = race?.pit;
+  if (!pit || pit.phase !== 'servicing' || race.state !== 'racing') return;
+  if (pit.serviceStage === 'remove') {
+    pit.serviceStage = 'fit';
+    dom.pitMini.dataset.stage = 'fit';
+    dom.pitMiniStep.textContent = '02 / 02';
+    dom.pitMiniTitle.textContent = 'NEW TYRES';
+    dom.pitMiniSub.textContent = 'TAP TO FIT THE FRESH SET';
+    dom.pitMiniAction.innerHTML = 'FIT TYRES <em>›</em>';
+    audio.tone(560, 0.09, 0.04, 'triangle');
+  } else if (pit.serviceStage === 'fit') {
+    pit.serviceStage = 'done';
+    pit.serviceTimer = 0.85;
+    dom.pitMini.dataset.stage = 'done';
+    dom.pitMiniStep.textContent = 'DONE';
+    dom.pitMiniTitle.textContent = 'TYRES FITTED';
+    dom.pitMiniSub.textContent = 'RELEASING THE CAR';
+    dom.pitMiniAction.innerHTML = 'GO <em>›</em>';
+    audio.tone(820, 0.16, 0.05, 'triangle');
+  }
+}
+
 function updatePitServiceBanner() {
   const pit = race.pit;
   if (pit.phase !== 'servicing') return;
-  const progress = 1 - clamp(pit.serviceTimer / Math.max(0.001, pit.serviceDuration), 0, 1);
-  dom.pitCallSub.textContent = `NEW TYRES · ${Math.max(0, pit.serviceTimer).toFixed(1)}s`;
-  dom.pitCallProgress.style.width = `${Math.round(progress * 100)}%`;
+  const stage = pit.serviceStage || 'remove';
+  dom.pitCallSub.textContent = stage === 'remove'
+    ? 'OLD TYRES · TAP TO REMOVE'
+    : stage === 'fit'
+      ? 'NEW SET READY · TAP TO FIT'
+      : 'TYRES FITTED · GO';
+  dom.pitCallProgress.style.width = stage === 'remove' ? '0%' : stage === 'fit' ? '55%' : '100%';
 }
 
 function showRaceMessage(main, sub = '', duration = 1900, final = false) {
@@ -2840,7 +2922,7 @@ function updateHUD(dt) {
     const remaining = Math.max(0, Math.ceil(pitMetrics().boxDistance - pit.routeProgress));
     pitStatus = `BOX 07 · ${remaining} M`;
   } else if (pit.phase === 'servicing') {
-    pitStatus = 'NEW TYRES';
+    pitStatus = pit.serviceStage === 'done' ? 'TYRES FITTED' : 'TYRE CHANGE';
   } else if (pit.phase === 'driving-out') {
     pitStatus = 'PIT EXIT';
   }
@@ -3145,6 +3227,7 @@ function finishRace() {
   audio.setPaused(true);
   showRaceMessage('FINISH', 'CHECKERED FLAG', 2400, true);
   hidePitCall();
+  hidePitMini();
   dom.controlsHint.classList.add('is-faded');
   dom.offTrack.classList.remove('show');
 }
@@ -3337,6 +3420,16 @@ function setKey(code, down) {
 }
 
 window.addEventListener('keydown', (e) => {
+  // During the tyre-change minigame space/enter work like a tap, so keyboard
+  // players can complete the stop without reaching for the mouse.
+  if (
+    appState === 'race' && race?.pit.phase === 'servicing' &&
+    (e.code === 'Space' || e.code === 'Enter')
+  ) {
+    if (!e.repeat) advancePitMini();
+    e.preventDefault();
+    return;
+  }
   if (setKey(e.code, true)) {
     if (appState === 'race') e.preventDefault();
     return;
@@ -3601,6 +3694,11 @@ function wireEvents() {
   dom.btnNewTrack.addEventListener('click', goToDraw);
   dom.btnRaceAgain.addEventListener('click', restartRace);
   dom.btnResultsNew.addEventListener('click', goToDraw);
+  dom.pitMiniHit?.addEventListener('click', (e) => {
+    e.preventDefault();
+    audio.ensure();
+    advancePitMini();
+  });
   wireTouchControls();
 }
 
