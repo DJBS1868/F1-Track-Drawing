@@ -1741,10 +1741,17 @@ function updatePitPhysics(dt, p) {
 
   const remainingToBox = boxDistance - pit.routeProgress;
   const remainingToExit = routeLength - pit.routeProgress;
+  const box = race.world.playerPitBox;
+  const distToBox = Math.hypot(box.x - p.pos.x, box.z - p.pos.z);
   // Pit-lane speed limit. Arrive fast, brake early, then creep the final metres
-  // so the box trigger is reliable on every circuit size.
+  // so the box trigger is reliable on every circuit size. Inside the docking
+  // zone the speed is driven by the real distance to the painted box, not by
+  // route progress, so the car eases onto its marks instead of stopping short
+  // and being teleported the last few metres.
+  const approachSpeed = Math.min(24, Math.sqrt(Math.max(0, remainingToBox) * 9.5) + 1.2);
+  const dockSpeed = Math.max(0, (distToBox - 0.08) * 0.85);
   const targetSpeed = pit.phase === 'driving-in'
-    ? Math.min(24, Math.sqrt(Math.max(0, remainingToBox) * 9.5) + 1.2)
+    ? (distToBox < 18 ? Math.min(8.5, dockSpeed) : approachSpeed)
     : Math.min(24, 9 + Math.sqrt(Math.max(0, remainingToExit) * 4.5));
   const speed = Math.max(0, p.vLong);
   const look = pitPathPoint(
@@ -1782,8 +1789,9 @@ function advancePitRoute(dt, p) {
     completeLap();
   }
 
-  if (pit.phase === 'driving-in' && pit.routeProgress >= boxDistance - 0.4 && Math.abs(p.vLong) <= 2.2) {
-    const box = race.world.playerPitBox;
+  const box = race.world.playerPitBox;
+  const dockDist = Math.hypot(p.pos.x - box.x, p.pos.z - box.z);
+  if (pit.phase === 'driving-in' && dockDist <= 0.16 && Math.abs(p.vLong) <= 0.28) {
     pit.routeProgress = boxDistance;
     p.progressDist = pit.entryProgress + boxDistance;
     p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;

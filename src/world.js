@@ -637,9 +637,7 @@ export function createRaceWorld(track, options = {}) {
   const bannerTex = canvasTexture(makeTextCanvas(512, 96, (ctx, w, h) => {
     ctx.fillStyle = '#111318'; ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = '#f3efe5'; ctx.font = '700 52px Rajdhani'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('APEX INK', w / 2 - 30, h / 2 + 2);
-    ctx.fillStyle = '#ff4d1f'; ctx.fillRect(w - 96, 0, 96, h);
-    ctx.fillStyle = '#111318'; ctx.font = '700 30px Rajdhani'; ctx.fillText('GP', w - 48, h / 2 + 2);
+    ctx.fillText('APEX INK', w / 2, h / 2 + 2);
   }));
   disposables.push(bannerTex);
   const bannerPlane = new THREE.Mesh(new THREE.PlaneGeometry(track.halfWidth * 1.5, 1.5), new THREE.MeshBasicMaterial({ map: bannerTex }));
