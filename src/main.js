@@ -1285,11 +1285,13 @@ function resetRaceState() {
     a.mistakeTime = 0;
     a.blocker = null;
     a.blockerGap = Infinity;
-    // Every AI makes one stop, staggered around the player's call window. Short
-    // sprint races stay pit-stop free, exactly like the player's schedule.
+    // Every AI makes exactly one stop on the same lap as the player. The whole
+    // field boxes together, so nobody steals track position by pitting a lap
+    // earlier or later. Short sprint races stay pit-stop free, exactly like the
+    // player's schedule.
     const callAfter = r.pit.callAfterLaps;
     const entryLap = r.totalLaps >= 3
-      ? clamp(callAfter + (i % 2), 1, r.totalLaps - 1)
+      ? clamp(callAfter + 1, 1, r.totalLaps - 1)
       : 0;
     a.pit = {
       phase: entryLap > 0 ? 'scheduled' : 'none',
@@ -2430,6 +2432,44 @@ function isPlayerInPitLane() {
   return phase === 'driving-in' || phase === 'servicing' || phase === 'driving-out';
 }
 
+/* When the whole field boxes together, the pit lane is a shared road. Keep each
+   car a few lengths behind the next one in the same direction so the pack queues
+   into the lane instead of driving through itself. A car parked in its box is
+   ignored: it has pulled left to the garage, leaving the through-lane clear. */
+const AI_PIT_FOLLOW_GAP = 9;
+const AI_PIT_MIN_GAP = 4.8;
+
+function aiPitAhead(a) {
+  const pit = a.pit;
+  if (pit.phase !== 'in' && pit.phase !== 'out') return null;
+  let ahead = null;
+  let gap = Infinity;
+  for (const b of race.ai) {
+    if (b === a) continue;
+    const other = b.pit;
+    // Service cars are pulled left against their garage, so the through-lane
+    // stays open. Everything moving up the lane is traffic for everyone else.
+    if (other.phase !== 'in' && other.phase !== 'out') continue;
+    const d = other.routeProgress - pit.routeProgress;
+    if (d > 0 && d < gap) {
+      gap = d;
+      ahead = b;
+    }
+  }
+  return ahead ? { car: ahead, gap } : null;
+}
+
+function aiPitFollowSpeed(a, target) {
+  const traffic = aiPitAhead(a);
+  if (!traffic) return target;
+  const gap = traffic.gap;
+  if (gap >= AI_PIT_FOLLOW_GAP) return target;
+  // Close the gap smoothly, then hold station behind the car in front. The
+  // 0.8 m/s margin avoids an accordion at the limiter.
+  const follow = Math.max(0, traffic.car.pit.speed + (gap - AI_PIT_MIN_GAP) * 1.6 - 0.8);
+  return Math.min(target, follow);
+}
+
 function enterAiPit(a) {
   const pit = a.pit;
   const over = Math.max(0, a.dist - pit.entryDist);
@@ -2451,7 +2491,8 @@ function updateAiPit(dt, a) {
 
   if (pit.phase === 'in') {
     const remaining = Math.max(0, box.routeProgress - pit.routeProgress);
-    const target = Math.min(PIT_LIMITER_SPEED, Math.sqrt(remaining * 9.5) + 1.2);
+    let target = Math.min(PIT_LIMITER_SPEED, Math.sqrt(remaining * 9.5) + 1.2);
+    target = aiPitFollowSpeed(a, target);
     if (pit.speed < target) pit.speed = Math.min(target, pit.speed + 9 * dt);
     else pit.speed = Math.max(target, pit.speed - 26 * dt);
     pit.routeProgress = Math.min(box.routeProgress, pit.routeProgress + pit.speed * dt);
@@ -2471,7 +2512,8 @@ function updateAiPit(dt, a) {
     }
   } else if (pit.phase === 'out') {
     const remaining = Math.max(0, routeLength - pit.routeProgress);
-    const target = Math.min(PIT_LIMITER_SPEED, 9 + Math.sqrt(remaining * 4.5));
+    let target = Math.min(PIT_LIMITER_SPEED, 9 + Math.sqrt(remaining * 4.5));
+    target = aiPitFollowSpeed(a, target);
     if (pit.speed < target) pit.speed = Math.min(target, pit.speed + 8 * dt);
     else pit.speed = Math.max(target, pit.speed - 20 * dt);
     pit.routeProgress = Math.min(routeLength, pit.routeProgress + pit.speed * dt);
