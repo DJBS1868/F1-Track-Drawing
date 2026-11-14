@@ -1144,6 +1144,7 @@ function enterRace(trackData) {
     camLook: new THREE.Vector3(),
     camSmooth: new THREE.Vector3(),
     camYaw: 0,
+    pitCamBlend: 0,
     shakeT: 0,
     leaderTimer: 0,
     player: {
@@ -1321,6 +1322,7 @@ function resetRaceState() {
   r.resultsShown = false;
   r.cameraReady = false;
   r.cameraMode = 0;
+  r.pitCamBlend = 0;
   r.leaderTimer = 0;
   r.gapShown = {};
   r.state = 'countdown';
@@ -1791,7 +1793,9 @@ function advancePitRoute(dt, p) {
 
   const box = race.world.playerPitBox;
   const dockDist = Math.hypot(p.pos.x - box.x, p.pos.z - box.z);
-  if (pit.phase === 'driving-in' && dockDist <= 0.16 && Math.abs(p.vLong) <= 0.28) {
+  // A little tolerance: at walking pace the auto-throttle can settle a few
+  // centimetres short of the painted centre, and the stop must still trigger.
+  if (pit.phase === 'driving-in' && dockDist <= 0.45 && Math.abs(p.vLong) <= 0.3) {
     pit.routeProgress = boxDistance;
     p.progressDist = pit.entryProgress + boxDistance;
     p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
@@ -2892,7 +2896,48 @@ const camVecA = new THREE.Vector3();
 const camVecB = new THREE.Vector3();
 const camVecC = new THREE.Vector3();
 const camVecD = new THREE.Vector3();
+const camPitPos = new THREE.Vector3();
+const camPitLook = new THREE.Vector3();
 const camUp = new THREE.Vector3(0, 1, 0);
+
+const PIT_CAM_LEAD = 11;
+const PIT_CAM_EXIT = 10;
+
+function pitCamRequested() {
+  const pit = race?.pit;
+  if (!pit || race.state === 'finished') return false;
+  if (pit.phase === 'servicing') return true;
+  const { boxDistance } = pitMetrics();
+  if (pit.phase === 'driving-in') return boxDistance - pit.routeProgress <= PIT_CAM_LEAD;
+  if (pit.phase === 'driving-out') return pit.routeProgress - boxDistance <= PIT_CAM_EXIT;
+  return false;
+}
+
+// Broadcast-style overhead shot of the player's own pit box. The stance is
+// anchored to the painted box rather than the car, so the car drives into a
+// still frame, the stop plays out beneath the lens, and the shot releases once
+// the car has pulled clear of its marks.
+function pitBoxCameraShot() {
+  const box = race.world.playerPitBox;
+  const yaw = box.yaw;
+  const laneX = Math.sin(yaw), laneZ = Math.cos(yaw);
+  const garageX = Math.cos(yaw), garageZ = -Math.sin(yaw);
+  const portrait = (race.camera.aspect || 1.7) < 1;
+  // Portrait needs a wider stance to keep the whole car inside the frame.
+  const pullBack = portrait ? 11.5 : 6.2;
+  const height = portrait ? 19.5 : 18.5;
+  camPitPos.set(
+    box.x - garageX * pullBack - laneX * 0.9,
+    height,
+    box.z - garageZ * pullBack - laneZ * 0.9
+  );
+  camPitLook.set(
+    box.x + garageX * 0.6 + laneX * 0.5,
+    0.5,
+    box.z + garageZ * 0.6 + laneZ * 0.5
+  );
+  return { pos: camPitPos, look: camPitLook, fov: 34 };
+}
 
 function updateRaceCamera(dt) {
   if (!race) return;
@@ -2975,6 +3020,24 @@ function updateRaceCamera(dt) {
     rigid = false;
   }
 
+  // Pit-box cam: a fast but smooth cut up to the overhead shot just before the
+  // car reaches its box, held through the stop, then released as it pulls away.
+  const wantPitCam = pitCamRequested();
+  race.pitCamBlend = damp(
+    race.pitCamBlend || 0,
+    wantPitCam ? 1 : 0,
+    wantPitCam ? 12 : 5.5,
+    dt
+  );
+  if (race.pitCamBlend > 0.001) {
+    const shot = pitBoxCameraShot();
+    const b = smoothstep(0, 1, race.pitCamBlend);
+    desired.lerp(shot.pos, b);
+    look.lerp(shot.look, b);
+    fov = lerp(fov, shot.fov, b);
+    if (b > 0.6) rigid = true;
+  }
+
   if (!race.cameraReady) {
     race.camSmooth.copy(desired);
     race.camLook.copy(look);
@@ -2998,7 +3061,7 @@ function updateRaceCamera(dt) {
   const impactKick = race.impactShake || 0;
   race.impactShake = impactKick * Math.exp(-7 * dt);
   const shake = ((p.onKerb ? 0.028 : 0) + (p.offroad ? 0.055 : 0) + impactKick + speedT * 0.006) *
-    (rigid ? 0.35 : 1);
+    (rigid ? 0.35 : 1) * (1 - smoothstep(0.55, 0.95, race.pitCamBlend));
   if (shake > 0.001 && race.state !== 'paused') {
     // Smooth pseudo-noise instead of per-frame random: a rumble, not a glitch.
     race.shakeT = (race.shakeT || 0) + dt;
