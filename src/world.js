@@ -602,19 +602,8 @@ export function createRaceWorld(track, options = {}) {
   const startLine = planeAt(track.start, track.halfWidth * 2 - 0.5, 2.2, 0.06, checkMat);
   scene.add(startLine);
 
-  // grid slot markings
-  const gridMat = new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.8 });
-  for (let i = 0; i < 4; i++) {
-    const dist = 8 + i * 9.5;
-    const idx = (track.N - Math.round(dist / track.step) + track.N) % track.N;
-    const s = track.samples[idx];
-    const lat = i % 2 === 0 ? -3.4 : 3.4;
-    const geo = new THREE.BoxGeometry(3.1, 0.012, 0.18);
-    const bar = new THREE.Mesh(geo, gridMat);
-    bar.position.set(s.x + s.nx * lat, 0.058, s.z + s.nz * lat);
-    bar.rotation.y = Math.atan2(s.tx, s.tz);
-    scene.add(bar);
-  }
+  // Grid boxes are built in main.js from the exact same poses the cars use,
+  // so every car sits inside its own painted slot before the lights go out.
 
   /* ── start gantry ───────────────────────────────────────────── */
   const gantry = new THREE.Group();

@@ -1007,6 +1007,9 @@ const GRID_GAP = 11;
 const GRID_FIRST = 10;
 const GRID_STAGGER = 5.2;
 const GRID_LATERAL = 2.75;
+const GRID_BOX_WIDTH = 3.5;
+const GRID_BOX_LENGTH = 6.2;
+const GRID_LINE_WIDTH = 0.14;
 
 // Proper staggered grid: two cars per row, one either side of the centre line,
 // with the right-hand car a few metres further back. Slot order is decided by
@@ -1017,18 +1020,79 @@ function gridDistance(slot) {
   return -(GRID_FIRST + row * GRID_GAP + col * GRID_STAGGER);
 }
 
-function gridPose(slot) {
+function gridPoseFor(track, slot) {
   const dist = gridDistance(slot);
   const lateral = (slot % 2 === 0 ? -1 : 1) * GRID_LATERAL;
-  const s = sampleAtDistance(race.track, dist);
+  const s = sampleAtDistance(track, dist);
+  const wrapped = ((dist % track.length) + track.length) % track.length;
   return {
     x: s.x + s.nx * lateral,
     z: s.z + s.nz * lateral,
     yaw: Math.atan2(s.tx, s.tz),
     lateral,
     dist,
+    index: Math.floor(wrapped / track.step) % track.N,
     s
   };
+}
+
+function gridPose(slot) {
+  return gridPoseFor(race.track, slot);
+}
+
+// Painted start boxes, one per car. These are generated from the same gridPose
+// data used to place the cars, so the grid the player sees under the car is
+// exactly where that car will launch from.
+function createStartGridMarkings(track, slotCount) {
+  const group = new THREE.Group();
+  group.name = 'start-grid';
+  const paint = new THREE.MeshStandardMaterial({
+    color: 0xf4f0e4,
+    roughness: 0.72,
+    metalness: 0.01,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2
+  });
+  const accent = new THREE.MeshStandardMaterial({
+    color: 0xff4d1f,
+    roughness: 0.7,
+    metalness: 0.01,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2
+  });
+
+  const bar = (pose, along, lateral, length, width, material) => {
+    const fx = Math.sin(pose.yaw);
+    const fz = Math.cos(pose.yaw);
+    const nx = fz;
+    const nz = -fx;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, 0.014, length), material);
+    mesh.position.set(
+      pose.x + fx * along + nx * lateral,
+      0.066,
+      pose.z + fz * along + nz * lateral
+    );
+    mesh.rotation.y = pose.yaw;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+
+  const halfW = GRID_BOX_WIDTH / 2;
+  const halfL = GRID_BOX_LENGTH / 2;
+  for (let slot = 0; slot < slotCount; slot++) {
+    const pose = gridPoseFor(track, slot);
+    // Long side rails, then the front and rear bars, form an open painted stall.
+    bar(pose, 0, -halfW, GRID_BOX_LENGTH, GRID_LINE_WIDTH, paint);
+    bar(pose, 0, halfW, GRID_BOX_LENGTH, GRID_LINE_WIDTH, paint);
+    bar(pose, halfL, 0, GRID_LINE_WIDTH, GRID_BOX_WIDTH + GRID_LINE_WIDTH, paint);
+    bar(pose, -halfL, 0, GRID_LINE_WIDTH, GRID_BOX_WIDTH + GRID_LINE_WIDTH, paint);
+    // A short orange tick on the outside of the box marks the slot clearly.
+    const outer = pose.lateral < 0 ? -1 : 1;
+    bar(pose, halfL - 0.8, outer * (halfW + 0.55), 1.15, 0.28, accent);
+  }
+  return group;
 }
 
 function hideAllScreens() {
@@ -1171,6 +1235,10 @@ function enterRace(trackData) {
     }
   };
 
+  // One painted box per car, built from the same grid poses the field uses.
+  race.startGrid = createStartGridMarkings(trackData, setup.aiCount + 1);
+  world.scene.add(race.startGrid);
+
   race.map = buildMinimapBase(trackData);
   dom.minimapTrackName.textContent = trackData.name;
   resetRaceState();
@@ -1231,6 +1299,10 @@ function resetRaceState() {
   p.cpNext = 0;
   p.cpArmed = false;
   p.sNorm = (startIndex % r.track.N) / r.track.N;
+  p.gridPose = {
+    x: pose.x, z: pose.z, yaw: pose.yaw, dist: pose.dist,
+    lateral: pose.lateral, index: startIndex, slot: playerGridSlot
+  };
   r.camYaw = pose.yaw;
   r.shakeT = 0;
   r.impactShake = 0;
@@ -1282,6 +1354,12 @@ function resetRaceState() {
     a.lastX = gp.x;
     a.lastZ = gp.z;
     a.lastYaw = gp.yaw;
+    a.gridDist = gp.dist;
+    a.gridLateral = gp.lateral;
+    a.gridPose = {
+      x: gp.x, z: gp.z, yaw: gp.yaw, dist: gp.dist,
+      lateral: gp.lateral, index: gp.index, slot: i
+    };
     a.finished = false;
     a.finishTime = null;
     a.history = [];
@@ -2437,6 +2515,9 @@ function aiPassCandidate(a, field, blocker, limit, tr) {
 function planAiOvertake(a, field, limit, tr) {
   const blocker = a.blocker;
   if (!blocker || a.finished) return;
+  // No overtaking moves until the car has cleared its own grid box and joined
+  // the road properly. Otherwise the launch turns into a sideways lunge.
+  if (a.dist - (a.gridDist ?? a.dist) < 12) return;
   const gap = a.blockerGap;
   if (gap > 28) return;
   const closing = a.speed - blocker.speed;
@@ -2738,6 +2819,15 @@ function updateAI(dt) {
     if (a.passUntil > now && !a.finished) targetLat = a.passLat;
     if (a.mistakeTime > 0) targetLat = clamp(targetLat + a.mistakeSide * 1.6, -limit, limit);
 
+    // Pull away in a straight line from the painted grid slot. Only once the car
+    // has actually travelled a few metres does it start blending across to the
+    // racing line, so nothing slides sideways out of its box at lights out.
+    const launchGap = Math.max(0, a.dist - (a.gridDist ?? a.dist));
+    const launchBlend = smoothstep(7, 38, launchGap);
+    if (launchBlend < 1) {
+      targetLat = lerp(a.gridLateral ?? targetLat, targetLat, launchBlend);
+    }
+
     for (const b of field) {
       if (b === a) continue;
       const d = b.dist - a.dist;
@@ -2748,8 +2838,9 @@ function updateAI(dt) {
     }
 
     // Rate-limit the sideways move so a lane change looks like a car changing
-    // its line, not a snap across the circuit.
-    const latRate = 4.6 + a.nerve * 1.8;
+    // its line, not a snap across the circuit. A stationary car cannot slide
+    // sideways at all: lateral movement scales with forward speed.
+    const latRate = (4.6 + a.nerve * 1.8) * smoothstep(0, 6.5, Math.abs(a.speed));
     a.lateral += clamp(targetLat - a.lateral, -latRate * dt, latRate * dt);
     a.lateral = clamp(a.lateral, -limit, limit);
   }
@@ -3266,8 +3357,48 @@ function updateRaceCamera(dt) {
    ═══════════════════════════════════════════════════════════════════ */
 const COUNT_STEPS = [[0, '3'], [1.1, '2'], [2.2, '1'], [3.2, 'GO']];
 
+// Re-seat every car on the exact pose that was displayed during the countdown.
+// The grid boxes, the models and the physics state all come from the same grid
+// pose, so lights out cannot snap a car to another part of the circuit.
+function anchorCarsToGrid() {
+  const r = race;
+  const p = r.player;
+  const gp = p.gridPose;
+  if (gp) {
+    p.pos = { x: gp.x, z: gp.z };
+    p.vel = { x: 0, z: 0 };
+    p.yaw = gp.yaw;
+    p.vLong = 0; p.vLat = 0; p.prevVLong = 0; p.yawRate = 0;
+    p.steer = 0; p.throttle = 0; p.brake = 0;
+    p.offroad = false; p.offTimer = 0;
+    p.progressDist = gp.dist;
+    p.lastIndex = gp.index;
+    p.sNorm = (((gp.dist % r.track.length) + r.track.length) % r.track.length) / r.track.length;
+    p.cpNext = 0;
+    p.cpArmed = false;
+    setCarPose(r.playerCar, gp.x, gp.z, gp.yaw);
+    r.playerCar.body.rotation.set(0, 0, 0);
+  }
+  for (const a of r.ai) {
+    const g = a.gridPose;
+    if (!g) continue;
+    a.dist = g.dist;
+    a.speed = 0;
+    a.lateral = g.lateral;
+    a.lastX = g.x;
+    a.lastZ = g.z;
+    a.lastYaw = g.yaw;
+    a.passLat = g.lateral;
+    a.passSide = 0;
+    a.passUntil = 0;
+    setCarPose(a.model, g.x, g.z, g.yaw);
+    a.model.body.rotation.set(0, 0, 0);
+  }
+}
+
 function startRaceNow() {
   const r = race;
+  anchorCarsToGrid();
   r.state = 'racing';
   r.time = 0;
   r.player.lapStart = 0;
