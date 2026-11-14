@@ -969,6 +969,8 @@ export function createRaceWorld(track) {
     startSample: track.start,
     pitRoute,
     playerPitBox,
+    pitBoxDistance: boxIndex * 5,
+    pitRouteLength: pitSpan,
     update(t, dt) {
       clouds.rotation.y = t * 0.0018;
       dust.rotation.y = t * 0.002;

@@ -67,6 +67,13 @@ export class AudioEngine {
     this.tone(freq, 0.05, 0.035, 'triangle');
   }
 
+  // Team-radio chirp: two short squelch blips before the pit call.
+  radio() {
+    this.tone(1450, 0.045, 0.028, 'square');
+    this.tone(1180, 0.05, 0.026, 'square', 0.07);
+    this.tone(1620, 0.07, 0.022, 'square', 0.17);
+  }
+
   countdown(step) {
     if (step === 'go') {
       this.tone(880, 0.4, 0.09, 'sawtooth');

@@ -30,6 +30,7 @@ The car drives its own throttle and brakes; you focus on the racing line unless 
 - Closed-loop validation that rejects self-intersecting scribbles.
 - Procedural 3D world, kerbs, scenery, start gantry, and dynamic lighting.
 - One to ten laps, zero to nine AI racers, three rival difficulty levels.
+- Randomised team-radio pit calls, a working pit lane, a timed tyre stop, and tyre wear that resets on fresh rubber.
 - Livery studio with per-part paint, presets, colour wheel, hex input, and stickers.
 - Chase and onboard cameras, live standings, sector map, DRS, lap timing, and a full classification screen.
 - Responsive desktop, phone, tablet, and landscape layouts with on-screen touch controls.

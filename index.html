@@ -340,6 +340,11 @@
       </button>
     </div>
 
+    <div class="hud-mobile-status">
+      <span id="hud-pit-mobile" class="pit-chip" aria-live="polite"></span>
+      <span id="hud-tyre-mobile" class="tyre-chip" aria-live="polite">TYRES 100%</span>
+    </div>
+
     <div class="hud-bottom">
       <div class="speedo">
         <svg viewBox="0 0 200 124" class="speedo-arc" aria-hidden="true">
@@ -358,8 +363,15 @@
       <div class="minimap-panel">
         <div class="minimap-head"><span class="mono">SECTOR MAP</span><span class="mono" id="minimap-track-name">CIRCUIT</span></div>
         <canvas id="minimap" width="520" height="360"></canvas>
-        <div class="minimap-foot"><span><i class="dot dot-you"></i>YOU</span><span><i class="dot dot-ai"></i>RIVALS</span><span id="hud-pit" class="pit-chip" aria-live="polite"></span><span id="hud-drs" class="drs-chip">DRS READY</span><span id="hud-assist" class="assist-chip">AUTO</span></div>
+        <div class="minimap-foot"><span><i class="dot dot-you"></i>YOU</span><span><i class="dot dot-ai"></i>RIVALS</span><span id="hud-pit" class="pit-chip" aria-live="polite"></span><span id="hud-tyre" class="tyre-chip" aria-live="polite">TYRES 100%</span><span id="hud-drs" class="drs-chip">DRS READY</span><span id="hud-assist" class="assist-chip">AUTO</span></div>
       </div>
+    </div>
+
+    <div id="pit-call" class="pit-call" aria-live="assertive">
+      <div class="pit-call-radio"><i></i><span>TEAM RADIO</span><em>BOX 07</em></div>
+      <strong id="pit-call-main">BOX THIS LAP</strong>
+      <small id="pit-call-sub">NEW TYRES READY · PIT LANE OPEN</small>
+      <div class="pit-call-progress"><span id="pit-call-progress"></span></div>
     </div>
 
     <div id="race-message" class="race-message"></div>

@@ -38,8 +38,11 @@ const dom = {
   hudSpeed: $('hud-speed'), hudGear: $('hud-gear'), speedoFill: $('speedo-fill'),
   speedoTicks: $('speedo-ticks'), throttleFill: $('throttle-fill'),
   minimap: $('minimap'), minimapTrackName: $('minimap-track-name'), hudDrs: $('hud-drs'),
-  hudPit: $('hud-pit'), hudAssist: $('hud-assist'),
+  hudPit: $('hud-pit'), hudAssist: $('hud-assist'), hudTyre: $('hud-tyre'),
+  hudPitMobile: $('hud-pit-mobile'), hudTyreMobile: $('hud-tyre-mobile'),
   raceMessage: $('race-message'), offTrack: $('off-track'),
+  pitCall: $('pit-call'), pitCallMain: $('pit-call-main'), pitCallSub: $('pit-call-sub'),
+  pitCallProgress: $('pit-call-progress'),
   countdown: $('countdown'), countdownValue: $('countdown-value'),
   controlsHint: $('controls-hint'), touchControls: $('touch-controls'),
   btnResume: $('btn-resume'), btnRestartRace: $('btn-restart-race'), btnNewTrack: $('btn-new-track'),
@@ -232,6 +235,22 @@ const DIFFICULTY = {
   pro: { factor: 0.915, accel: 11.2, label: 'PRO' },
   ace: { factor: 0.975, accel: 13.0, label: 'ACE' }
 };
+
+/* One mandatory stop, halfway through the race. The call comes at the start
+   of the middle lap: 3-4 laps call on lap 2, 5-6 on lap 3, 7-8 on lap 4,
+   9-10 on lap 5. One and two lap sprints need no stop. */
+function pitCallLapAfter(totalLaps) {
+  return totalLaps >= 3 ? Math.ceil(totalLaps / 2) - 1 : -1;
+}
+
+const PIT_CALL_LINES = [
+  { main: 'BOX THIS LAP', sub: 'NEW TYRES READY · BOX 07' },
+  { main: 'BOX BOX', sub: 'CONFIRMED · PIT THIS LAP' },
+  { main: 'BOX, BOX, BOX', sub: 'COME IN · FRESH TYRES WAITING' },
+  { main: 'PIT THIS LAP', sub: 'BOX 07 · TYRES ARE READY' },
+  { main: 'BOX BOX', sub: 'TEAM RADIO · NEW TYRES IN THE BOX' },
+  { main: 'COME IN, BOX', sub: 'BOX 07 · FRESH SET WAITING' }
+];
 
 /* ═══════════════════════════════════════════════════════════════════
    UI helpers
@@ -1087,10 +1106,13 @@ function enterRace(trackData) {
     aiCount: setup.aiCount,
     pit: {
       phase: 'waiting',
-      callAfterLaps: Math.floor(setup.totalLaps / 2) - 1,
+      callAfterLaps: pitCallLapAfter(setup.totalLaps),
+      entryDistance: 0,
       routeProgress: 0,
       entryProgress: 0,
-      serviceTimer: 0
+      serviceTimer: 0,
+      serviceDuration: 3.2,
+      stops: 0
     },
     world,
     camera,
@@ -1119,7 +1141,8 @@ function enterRace(trackData) {
       lapsCompleted: 0, lapStart: 0, sNorm: 0, lastIndex: 0,
       progressDist: 0, cpNext: 0, cpArmed: false, sectors: [false, false, false],
       bestLap: null, lastLap: null, topSpeed: 0, finished: false, finishTime: null,
-      finishPosition: setup.aiCount + 1, drs: false, trackDist: 0, assistState: 'auto', history: []
+      finishPosition: setup.aiCount + 1, drs: false, trackDist: 0, assistState: 'auto', history: [],
+      tyreLife: 1, tyreStops: 0
     }
   };
 
@@ -1160,11 +1183,16 @@ function resetRaceState() {
   p.lapsCompleted = 0; p.lapStart = 0;
   p.sectors = [false, false, false];
   r.pit.phase = 'waiting';
+  r.pit.entryDistance = 0;
   r.pit.routeProgress = 0;
   r.pit.entryProgress = 0;
   r.pit.serviceTimer = 0;
+  r.pit.stops = 0;
+  hidePitCall();
   p.bestLap = readBest(r.track.seed);
   p.lastLap = null; p.topSpeed = 0;
+  p.tyreLife = 1;
+  p.tyreStops = 0;
   p.finished = false; p.finishTime = null; p.finishPosition = r.ai.length + 1;
   p.drs = false; p.trackDist = 0;
   p.assistState = 'auto';
@@ -1589,56 +1617,76 @@ function pitRoutePoint(distance) {
   };
 }
 
+function pitMetrics() {
+  const route = race.world.pitRoute;
+  return {
+    routeLength: race.world.pitRouteLength ?? (route.length - 1) * 5,
+    boxDistance: race.world.pitBoxDistance ?? 190
+  };
+}
+
 function updatePitPhysics(dt, p) {
   const pit = race.pit;
-  const routeLength = (race.world.pitRoute.length - 1) * 5;
-  const boxDistance = 190;
+  const { routeLength, boxDistance } = pitMetrics();
+
   if (pit.phase === 'called') {
-    const entryDistance = (p.lapsCompleted + 1) * race.track.length - 190;
-    if (p.progressDist >= entryDistance) {
+    if (p.progressDist >= pit.entryDistance) {
       pit.phase = 'driving-in';
-      pit.routeProgress = clamp(p.progressDist - entryDistance, 0, 8);
-      pit.entryProgress = p.progressDist - pit.routeProgress;
-      showRaceMessage('PIT IN', 'SLOW DOWN · BOX 07', 2200);
+      pit.entryProgress = pit.entryDistance;
+      pit.routeProgress = clamp(p.progressDist - pit.entryDistance, 0, 10);
+      p.progressDist = pit.entryProgress + pit.routeProgress;
+      showPitCall('PIT IN', 'PIT LIMITER ON · BOX 07 AHEAD', { ttl: 2400 });
+      audio.tone(520, 0.1, 0.04, 'triangle');
     }
   }
+
   if (pit.phase === 'servicing') {
     const box = race.world.playerPitBox;
     p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
     p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
     p.throttle = 0; p.brake = 1; p.steer = 0;
     p.offroad = false; p.offTimer = 0;
-    pit.serviceTimer -= dt;
+    pit.serviceTimer = Math.max(0, pit.serviceTimer - dt);
     if (pit.serviceTimer <= 0) {
       pit.phase = 'driving-out';
-      showRaceMessage('PIT STOP COMPLETE', 'REJOIN THE CIRCUIT', 2200);
-      audio.tone(740, 0.14, 0.05, 'triangle');
+      p.tyreLife = 1;
+      p.tyreStops = (p.tyreStops || 0) + 1;
+      pit.stops++;
+      showPitCall('NEW TYRES FITTED', 'FULL GRIP · REJOIN THE CIRCUIT', { kind: 'done' });
+      audio.radio();
+      audio.tone(820, 0.18, 0.06, 'triangle');
     }
     return { active: true, locked: true };
   }
-  if (pit.phase !== 'driving-in' && pit.phase !== 'driving-out') return { active: false, locked: false };
+
+  if (pit.phase !== 'driving-in' && pit.phase !== 'driving-out') {
+    return { active: false, locked: false };
+  }
 
   const remainingToBox = boxDistance - pit.routeProgress;
   const remainingToExit = routeLength - pit.routeProgress;
+  // Pit-lane speed limit. Arrive fast, brake early, then creep the final metres
+  // so the box trigger is reliable on every circuit size.
   const targetSpeed = pit.phase === 'driving-in'
-    ? Math.min(26, Math.sqrt(Math.max(0, remainingToBox) * 10))
-    : Math.min(26, 10 + Math.sqrt(Math.max(0, remainingToExit) * 5));
+    ? Math.min(24, Math.sqrt(Math.max(0, remainingToBox) * 9.5) + 1.2)
+    : Math.min(24, 9 + Math.sqrt(Math.max(0, remainingToExit) * 4.5));
   const speed = Math.max(0, p.vLong);
-  const look = pitRoutePoint(pit.routeProgress + clamp(8 + speed * 0.32, 9, 18));
+  const look = pitRoutePoint(pit.routeProgress + clamp(9 + speed * 0.34, 10, 21));
   const heading = Math.atan2(look.x - p.pos.x, look.z - p.pos.z);
   const headingError = Math.atan2(Math.sin(heading - p.yaw), Math.cos(heading - p.yaw));
-  const steer = clamp(headingError * 1.9, -1, 1);
+  const steer = clamp(headingError * 2.1, -1, 1);
   pit.steerDemand = steer;
   pit.targetSpeed = targetSpeed;
-  pit.throttleDemand = clamp((targetSpeed - speed) * 0.18, 0, 0.82);
-  pit.brakeDemand = speed > targetSpeed + 0.6 ? clamp((speed - targetSpeed - 0.6) * 0.22, 0.12, 1) : 0;
+  pit.throttleDemand = clamp((targetSpeed - speed) * 0.2, 0, 0.85);
+  pit.brakeDemand = speed > targetSpeed + 0.5
+    ? clamp((speed - targetSpeed - 0.5) * 0.24, 0.14, 1)
+    : 0;
   return { active: true, locked: false };
 }
 
 function advancePitRoute(dt, p) {
   const pit = race.pit;
-  const routeLength = (race.world.pitRoute.length - 1) * 5;
-  const boxDistance = 190;
+  const { routeLength, boxDistance } = pitMetrics();
   const routeLimit = pit.phase === 'driving-in' ? boxDistance : routeLength;
   const previousProgress = p.progressDist;
   pit.routeProgress = Math.min(routeLimit, pit.routeProgress + Math.max(0, p.vLong) * dt);
@@ -1654,20 +1702,35 @@ function advancePitRoute(dt, p) {
     completeLap();
   }
 
-  if (pit.phase === 'driving-in' && pit.routeProgress >= boxDistance - 1.5 && Math.abs(p.vLong) <= 1.5) {
+  if (pit.phase === 'driving-in' && pit.routeProgress >= boxDistance - 0.4 && Math.abs(p.vLong) <= 2.2) {
     const box = race.world.playerPitBox;
     pit.routeProgress = boxDistance;
+    p.progressDist = pit.entryProgress + boxDistance;
     p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
     p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
     pit.phase = 'servicing';
-    pit.serviceTimer = 2.8;
-    showRaceMessage('PIT STOP', 'HOLD POSITION · SERVICE IN PROGRESS', 3000);
+    pit.serviceTimer = pit.serviceDuration;
+    showPitCall('PIT STOP', 'NEW TYRES · SERVICE IN PROGRESS', { kind: 'service' });
     audio.tone(620, 0.12, 0.05, 'triangle');
-  } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1.5) {
+  } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1) {
     pit.routeProgress = routeLength;
     pit.phase = 'waiting';
     p.progressDist = pit.entryProgress + routeLength;
+    p.sNorm = (((p.progressDist % race.track.length) + race.track.length) % race.track.length) / race.track.length;
+    showPitCall('PIT EXIT', 'BACK ON THE RACE TRACK', { ttl: 1800 });
+    if (p.lapsCompleted === race.totalLaps - 1) {
+      showRaceMessage('FINAL LAP', 'EVERYTHING YOU HAVE', 2300, true);
+      audio.tone(880, 0.18, 0.06, 'triangle');
+    }
   }
+}
+
+function updateTyreWear(dt, p, pitActive) {
+  if (race.state !== 'racing' || p.finished || pitActive) return;
+  const cornerLoad = clamp(Math.abs(p.vLat) / 5, 0, 1.4);
+  const speedLoad = clamp(Math.abs(p.vLong) / 84, 0, 1);
+  const wear = 0.00145 + cornerLoad * 0.0009 + speedLoad * 0.00035 + (p.offroad ? 0.0035 : 0);
+  p.tyreLife = clamp(p.tyreLife - dt * wear, 0, 1);
 }
 
 function updatePlayerPhysics(dt) {
@@ -1688,6 +1751,11 @@ function updatePlayerPhysics(dt) {
   let brakeDemand = pitDrive.active ? race.pit.brakeDemand : 0;
   let assistState = pitDrive.active ? 'pit-limiter' : 'auto';
 
+  // The team calls you in, then the car starts braking for the pit entry so the
+  // limiter engages at a sane speed instead of arriving flat out.
+  const pitRemaining = race.pit.phase === 'called' ? race.pit.entryDistance - p.progressDist : Infinity;
+  const pitApproach = pitRemaining > -4 && pitRemaining < 165;
+
   if (controls.active && !pitDrive.active) {
     if (manualBrake) {
       // Player brake always wins — it is stronger than the auto brake.
@@ -1698,10 +1766,18 @@ function updatePlayerPhysics(dt) {
       throttleDemand = 1;
       assistState = 'manual';
     } else if (!handbrake) {
-      const auto = autoDriveDemand(p, race.track);
-      throttleDemand = auto.throttle;
-      brakeDemand = auto.brake;
-      assistState = auto.brake > 0.15 ? 'auto-brake' : 'auto';
+      if (pitApproach) {
+        const target = Math.sqrt(26 * 26 + 2 * 24 * Math.max(0, pitRemaining));
+        const speed = Math.max(0, p.vLong);
+        throttleDemand = clamp((target - speed) * 0.3, 0, 1);
+        brakeDemand = speed > target + 1.2 ? clamp((speed - target) * 0.16, 0.18, 1) : 0;
+        assistState = 'pit-approach';
+      } else {
+        const auto = autoDriveDemand(p, race.track);
+        throttleDemand = auto.throttle;
+        brakeDemand = auto.brake;
+        assistState = auto.brake > 0.15 ? 'auto-brake' : 'auto';
+      }
     } else {
       assistState = 'manual';
     }
@@ -1723,13 +1799,14 @@ function updatePlayerPhysics(dt) {
     clamp(speed0 / HANDLING.steerSpeedRef, 0, 1)
   );
   const steerAngle = p.steer * maxSteer;
-  const gripAccel = p.offroad
+  const tyreGrip = 0.84 + 0.16 * clamp(p.tyreLife ?? 1, 0, 1);
+  const gripAccel = (p.offroad
     ? HANDLING.gripOffroad
     : handbrake
       ? HANDLING.gripHandbrake
       : p.onKerb
         ? HANDLING.gripKerb
-        : HANDLING.gripTrack;
+        : HANDLING.gripTrack) * tyreGrip;
   const maxYaw = gripAccel / Math.max(4, speed0);
   let yawTarget = (vLong0 / 3.05) * Math.tan(steerAngle);
   if (handbrake) yawTarget *= 1.55;
@@ -1766,13 +1843,13 @@ function updatePlayerPhysics(dt) {
   if (vLong < -12) vLong = -12;
   if (p.throttle < 0.02 && p.brake < 0.02 && !handbrake && Math.abs(vLong) < 0.2) vLong = 0;
 
-  const sideGrip = p.offroad
+  const sideGrip = (p.offroad
     ? HANDLING.sideGripOffroad
     : handbrake
       ? HANDLING.sideGripHandbrake
       : p.onKerb
         ? HANDLING.sideGripKerb
-        : HANDLING.sideGripTrack;
+        : HANDLING.sideGripTrack) * tyreGrip;
   vLat *= Math.exp(-sideGrip * dt);
 
   p.vLong = vLong;
@@ -1782,24 +1859,32 @@ function updatePlayerPhysics(dt) {
   p.pos.x += p.vel.x * dt;
   p.pos.z += p.vel.z * dt;
   if (pitDrive.active) advancePitRoute(dt, p);
+  updateTyreWear(dt, p, pitDrive.active);
 
-  const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
-  const sample = tr.samples[near.index];
-  p.lastIndex = near.index;
-  p.sNorm = (near.index % tr.N) / tr.N;
-  p.trackDist = near.dist;
-  p.lateral = (p.pos.x - sample.x) * sample.nx + (p.pos.z - sample.z) * sample.nz;
-  p.lastK = sample.k;
-  p.offroad = pitDrive.active ? false : near.dist > tr.halfWidth + 1.15;
-  p.onKerb = !pitDrive.active && !p.offroad && near.dist > tr.halfWidth - 0.55 && near.dist < tr.halfWidth + 1.6;
   if (pitDrive.active) {
+    // The racing line's nearest sample would pull the minimap and timing back
+    // onto the circuit while the car is physically in the pit lane.
+    p.offroad = false;
+    p.onKerb = false;
     p.offTimer = 0;
-  } else if (p.offroad) {
-    p.offTimer += dt * (near.dist > tr.halfWidth + 25 ? 2 : 1);
+    p.lastK = 0;
   } else {
-    p.offTimer = Math.max(0, p.offTimer - dt * 2.5);
+    const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
+    const sample = tr.samples[near.index];
+    p.lastIndex = near.index;
+    p.sNorm = (near.index % tr.N) / tr.N;
+    p.trackDist = near.dist;
+    p.lateral = (p.pos.x - sample.x) * sample.nx + (p.pos.z - sample.z) * sample.nz;
+    p.lastK = sample.k;
+    p.offroad = near.dist > tr.halfWidth + 1.15;
+    p.onKerb = !p.offroad && near.dist > tr.halfWidth - 0.55 && near.dist < tr.halfWidth + 1.6;
+    if (p.offroad) {
+      p.offTimer += dt * (near.dist > tr.halfWidth + 25 ? 2 : 1);
+    } else {
+      p.offTimer = Math.max(0, p.offTimer - dt * 2.5);
+    }
+    if (race.state === 'racing' && p.offTimer > 2.7) recoverPlayer();
   }
-  if (!pitDrive.active && race.state === 'racing' && p.offTimer > 2.7) recoverPlayer();
 
   const kmh = Math.abs(vLong) * 3.6;
   if (race.state === 'racing') p.topSpeed = Math.max(p.topSpeed, kmh);
@@ -1934,13 +2019,19 @@ function completeLap() {
   p.sectors = [false, false, false];
   if (p.lapsCompleted >= race.totalLaps) {
     finishRace();
-  } else if (p.lapsCompleted === race.pit.callAfterLaps && race.pit.phase === 'waiting') {
+  } else if (p.lapsCompleted === race.pit.callAfterLaps && race.pit.phase === 'waiting' && race.pit.stops === 0) {
+    const call = PIT_CALL_LINES[Math.floor(Math.random() * PIT_CALL_LINES.length)];
     race.pit.phase = 'called';
-    showRaceMessage('PIT THIS LAP', 'BOX 07 · FOLLOW THE PIT LANE', 3200, true);
+    race.pit.entryDistance = (p.lapsCompleted + 1) * race.track.length - pitMetrics().boxDistance;
+    showPitCall(call.main, call.sub, { ttl: 5200 });
+    audio.radio();
     audio.tone(520, 0.16, 0.05, 'triangle');
   } else if (p.lapsCompleted === race.totalLaps - 1) {
-    showRaceMessage('FINAL LAP', 'EVERYTHING YOU HAVE', 2300, true);
-    audio.tone(880, 0.18, 0.06, 'triangle');
+    const inPit = race.pit.phase === 'driving-in' || race.pit.phase === 'servicing' || race.pit.phase === 'driving-out';
+    if (!inPit) {
+      showRaceMessage('FINAL LAP', 'EVERYTHING YOU HAVE', 2300, true);
+      audio.tone(880, 0.18, 0.06, 'triangle');
+    }
   } else {
     showRaceMessage(`LAP ${p.lapsCompleted + 1} / ${race.totalLaps}`, 'KEEP IT CLEAN', 1900);
     audio.tone(660, 0.1, 0.04, 'triangle');
@@ -2404,6 +2495,36 @@ function updateAI(dt) {
    HUD
    ═══════════════════════════════════════════════════════════════════ */
 let messageTimer = 0;
+let pitCallTimer = 0;
+
+function showPitCall(main, sub = '', { ttl = 0, kind = '' } = {}) {
+  if (!dom.pitCall) return;
+  dom.pitCallMain.textContent = main;
+  dom.pitCallSub.textContent = sub;
+  dom.pitCall.classList.toggle('is-service', kind === 'service');
+  dom.pitCall.classList.toggle('is-done', kind === 'done');
+  dom.pitCall.classList.add('show');
+  dom.hud?.classList.add('has-pit-call');
+  dom.raceMessage.classList.remove('show');
+  clearTimeout(messageTimer);
+  dom.pitCallProgress.style.width = kind === 'service' ? '0%' : kind === 'done' ? '100%' : '0%';
+  clearTimeout(pitCallTimer);
+  if (ttl > 0) pitCallTimer = setTimeout(hidePitCall, ttl);
+}
+
+function hidePitCall() {
+  clearTimeout(pitCallTimer);
+  dom.pitCall?.classList.remove('show', 'is-service', 'is-done');
+  dom.hud?.classList.remove('has-pit-call');
+}
+
+function updatePitServiceBanner() {
+  const pit = race.pit;
+  if (pit.phase !== 'servicing') return;
+  const progress = 1 - clamp(pit.serviceTimer / Math.max(0.001, pit.serviceDuration), 0, 1);
+  dom.pitCallSub.textContent = `NEW TYRES · ${Math.max(0, pit.serviceTimer).toFixed(1)}s`;
+  dom.pitCallProgress.style.width = `${Math.round(progress * 100)}%`;
+}
 
 function showRaceMessage(main, sub = '', duration = 1900, final = false) {
   dom.raceMessage.innerHTML = `${main}${sub ? `<small>${sub}</small>` : ''}`;
@@ -2439,19 +2560,39 @@ function updateHUD(dt) {
   dom.speedoFill.style.strokeDashoffset = String(100 - clamp(kmh / 320, 0, 1) * 100);
   dom.throttleFill.style.height = `${Math.round(p.throttle * 100)}%`;
   const assist = p.assistState || 'auto';
-  dom.hudAssist.textContent = assist === 'manual' ? 'MANUAL' : assist === 'auto-brake' ? 'BRAKING' : 'AUTO';
-  dom.hudAssist.classList.toggle('is-manual', assist === 'manual');
-  dom.hudAssist.classList.toggle('is-braking', assist === 'auto-brake');
+  dom.hudAssist.textContent = assist === 'manual'
+    ? 'MANUAL'
+    : assist === 'pit-approach' || assist === 'pit-limiter'
+      ? 'PIT IN'
+      : assist === 'auto-brake' ? 'BRAKING' : 'AUTO';
+  dom.hudAssist.classList.toggle('is-manual', assist === 'manual' || assist === 'pit-approach');
+  dom.hudAssist.classList.toggle('is-braking', assist === 'auto-brake' || assist === 'pit-approach');
   dom.hudDrs.classList.toggle('is-active', p.drs);
   dom.hudDrs.textContent = p.drs ? 'DRS OPEN' : 'DRS READY';
-  const pitStatus = {
-    called: 'PIT THIS LAP',
-    'driving-in': 'PIT IN · BOX 07',
-    servicing: 'BOX 07 · SERVICE',
-    'driving-out': 'PIT EXIT'
-  }[race.pit.phase] || '';
-  dom.hudPit.textContent = pitStatus;
-  dom.hudPit.classList.toggle('is-visible', Boolean(pitStatus));
+  const pit = race.pit;
+  let pitStatus = '';
+  if (pit.phase === 'called') {
+    const remaining = Math.max(0, Math.ceil(pit.entryDistance - p.progressDist));
+    pitStatus = remaining > 0 ? `PIT IN ${remaining} M` : 'PIT LANE NOW';
+  } else if (pit.phase === 'driving-in') {
+    const remaining = Math.max(0, Math.ceil(pitMetrics().boxDistance - pit.routeProgress));
+    pitStatus = `BOX 07 · ${remaining} M`;
+  } else if (pit.phase === 'servicing') {
+    pitStatus = 'NEW TYRES';
+  } else if (pit.phase === 'driving-out') {
+    pitStatus = 'PIT EXIT';
+  }
+  for (const el of [dom.hudPit, dom.hudPitMobile]) {
+    el.textContent = pitStatus;
+    el.classList.toggle('is-visible', Boolean(pitStatus));
+  }
+  const tyrePct = Math.round(clamp(p.tyreLife ?? 1, 0, 1) * 100);
+  for (const el of [dom.hudTyre, dom.hudTyreMobile]) {
+    el.textContent = `TYRES ${tyrePct}%`;
+    el.classList.toggle('is-fresh', tyrePct > 98);
+    el.classList.toggle('is-worn', tyrePct < 55);
+  }
+  updatePitServiceBanner();
   dom.offTrack.classList.toggle('show', race.state === 'racing' && p.offroad && Math.abs(p.vLong) > 2.5);
 
   race.leaderTimer -= dt;
@@ -2629,7 +2770,7 @@ function startRaceNow() {
   audio.countdown('go');
   dom.countdown.classList.add('show');
   setTimeout(() => {
-    if (race && race.state === 'racing') {
+    if (race && race.state === 'racing' && race.time < 5000 && race.pit.phase === 'waiting') {
       showRaceMessage('AUTO THROTTLE', 'FOCUS ON STEERING · W/S OVERRIDE', 2400);
     }
   }, 1100);
@@ -2682,6 +2823,7 @@ function finishRace() {
   } catch {}
   audio.setPaused(true);
   showRaceMessage('FINISH', 'CHECKERED FLAG', 2400, true);
+  hidePitCall();
   dom.controlsHint.classList.add('is-faded');
   dom.offTrack.classList.remove('show');
 }
