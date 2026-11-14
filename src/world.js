@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.js';
 import {
-  clamp, lerp, mulberry32, createCanvasTexture, makeTextCanvas, canvasTexture,
+  clamp, lerp, damp, dampAngle, mulberry32, createCanvasTexture, makeTextCanvas, canvasTexture,
   disposeObject, TAU
 } from './utils.js';
 
@@ -1022,7 +1022,8 @@ export function createRaceWorld(track, options = {}) {
       lateral: PIT_BOX_LATERAL,
       x: lanePoint.x + nx * PIT_BOX_LATERAL,
       z: lanePoint.z + nz * PIT_BOX_LATERAL,
-      yaw
+      yaw,
+      crew: []
     };
     pitBoxes.push(box);
 
@@ -1101,36 +1102,80 @@ export function createRaceWorld(track, options = {}) {
       }
     }
 
-    // A lit team strip across the rear of the bay, plus the crew waiting on the
-    // apron between the car and the garage.
+    // A lit team strip across the rear of the bay. The four tyre changers wait
+    // at the corners of the team's own pit box, not inside the garage, and are
+    // animated out to their wheels when the car is almost home.
     const bayStrip = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.14, 0.1), teamMat);
     bayStrip.position.set(0, 5.62, 4.02);
     g.add(bayStrip);
-    for (let crewIndex = 0; crewIndex < 4; crewIndex++) {
+
+    const crewBoxZ = PIT_BOX_LATERAL - GARAGE_LATERAL;
+    const crewDefs = [
+      { wheel: 'fl', x: -4.5, z: crewBoxZ - 1.65, tx: -1.63, tz: crewBoxZ - 0.86 - 0.75, yaw: 0 },
+      { wheel: 'fr', x: -4.5, z: crewBoxZ + 1.65, tx: -1.63, tz: crewBoxZ + 0.86 + 0.75, yaw: Math.PI },
+      { wheel: 'rl', x: 4.5, z: crewBoxZ - 1.65, tx: 1.56, tz: crewBoxZ - 0.84 - 0.75, yaw: 0 },
+      { wheel: 'rr', x: 4.5, z: crewBoxZ + 1.65, tx: 1.56, tz: crewBoxZ + 0.84 + 0.75, yaw: Math.PI }
+    ];
+    for (let crewIndex = 0; crewIndex < crewDefs.length; crewIndex++) {
+      const def = crewDefs[crewIndex];
       const crew = new THREE.Group();
-      const x = -4.1 + crewIndex * 2.55;
+      crew.name = `pit-crew-${team.number}-${def.wheel}`;
       const lean = (crewIndex % 2 === 0 ? 1 : -1) * 0.035;
+
+      const legPivotA = new THREE.Group();
+      legPivotA.position.set(-0.09, 0.62, 0);
       const legA = new THREE.Mesh(crewLegGeo, crewSuitMat);
-      legA.position.set(-0.09, 0.38, 0);
+      legA.position.y = -0.28;
+      legPivotA.add(legA);
+      const legPivotB = new THREE.Group();
+      legPivotB.position.set(0.09, 0.62, 0);
       const legB = new THREE.Mesh(crewLegGeo, crewSuitMat);
-      legB.position.set(0.09, 0.38, 0);
+      legB.position.y = -0.28;
+      legPivotB.add(legB);
+
       const torso = new THREE.Mesh(crewTorsoGeo, crewSuitMat);
-      torso.position.set(0, 0.99, 0);
+      torso.position.set(0, 0.96, 0);
       torso.rotation.z = lean;
+
+      const armPivotA = new THREE.Group();
+      armPivotA.position.set(-0.25, 1.2, 0.02);
+      armPivotA.rotation.z = -0.09;
       const armA = new THREE.Mesh(crewArmGeo, crewSuitMat);
-      armA.position.set(-0.25, 0.98, 0.02);
-      armA.rotation.z = -0.09;
+      armA.position.y = -0.26;
+      armPivotA.add(armA);
+      const armPivotB = new THREE.Group();
+      armPivotB.position.set(0.25, 1.2, 0.02);
+      armPivotB.rotation.z = 0.09;
       const armB = new THREE.Mesh(crewArmGeo, crewSuitMat);
-      armB.position.set(0.25, 0.98, 0.02);
-      armB.rotation.z = 0.09;
+      armB.position.y = -0.26;
+      armPivotB.add(armB);
+
       const head = new THREE.Mesh(crewHeadGeo, crewSkinMat);
-      head.position.set(0, 1.47, 0);
+      head.position.set(0, 1.44, 0);
       const helmet = new THREE.Mesh(crewHelmetGeo, teamMat);
-      helmet.position.set(0, 1.5, 0);
-      crew.add(legA, legB, torso, armA, armB, head, helmet);
-      crew.position.set(x, 0.1, -5.35);
-      crew.rotation.y = Math.PI + (crewIndex - 1.5) * 0.12;
+      helmet.position.set(0, 1.47, 0);
+      crew.add(legPivotA, legPivotB, torso, armPivotA, armPivotB, head, helmet);
+      crew.traverse((child) => { if (child.isMesh) child.castShadow = true; });
+      crew.position.set(def.x, 0, def.z);
+      const idleYaw = Math.atan2(-def.x, crewBoxZ - def.z);
+      crew.rotation.y = idleYaw;
       g.add(crew);
+      box.crew.push({
+        wheel: def.wheel,
+        group: crew,
+        legA: legPivotA,
+        legB: legPivotB,
+        armA: armPivotA,
+        armB: armPivotB,
+        torso,
+        idle: { x: def.x, z: def.z, yaw: idleYaw },
+        target: { x: def.tx, z: def.tz, yaw: def.yaw },
+        x: def.x,
+        z: def.z,
+        walk: Math.random() * TAU,
+        idleT: Math.random() * TAU,
+        speed: 4.4 + Math.random() * 0.6
+      });
     }
 
     // Team-coloured front pillars, fascia and sign.
@@ -1410,6 +1455,65 @@ export function createRaceWorld(track, options = {}) {
       startLights.forEach((mat, i) => {
         mat.emissiveIntensity = i < count ? 4.5 : 0.05;
       });
+    },
+    // Walk the chosen box's crew between their waiting spots at the box corners
+    // and one tyre each. They are only animated for the player's stop; every
+    // other garage crew still waits at its own box.
+    updatePitCrew(dt, box = playerPitBox, deployed = false, working = false) {
+      if (!box?.crew) return;
+      const stepTime = Math.max(0, dt);
+      for (const actor of box.crew) {
+        const goal = deployed ? actor.target : actor.idle;
+        const dx = goal.x - actor.x;
+        const dz = goal.z - actor.z;
+        const dist = Math.hypot(dx, dz);
+        const workPose = deployed && working && dist <= 0.012;
+        if (dist > 0.012) {
+          const step = Math.min(dist, actor.speed * stepTime);
+          actor.x += (dx / dist) * step;
+          actor.z += (dz / dist) * step;
+          actor.walk += stepTime * 13;
+          actor.group.position.set(actor.x, Math.abs(Math.sin(actor.walk)) * 0.035, actor.z);
+          const walkYaw = Math.atan2(dx, dz);
+          actor.group.rotation.y = dampAngle(actor.group.rotation.y, walkYaw, 14, stepTime);
+          const swing = Math.sin(actor.walk) * 0.6;
+          actor.legA.rotation.x = swing;
+          actor.legB.rotation.x = -swing;
+          actor.armA.rotation.x = -swing * 0.7;
+          actor.armB.rotation.x = swing * 0.7;
+          actor.torso.rotation.x = damp(actor.torso.rotation.x, 0.06, 10, stepTime);
+        } else {
+          actor.x = goal.x;
+          actor.z = goal.z;
+          actor.idleT += stepTime * (workPose ? 7 : 2.2);
+          const crouch = workPose ? -0.15 : 0;
+          const bob = Math.sin(actor.idleT) * (workPose ? 0.012 : 0.004);
+          actor.group.position.set(actor.x, crouch + bob, actor.z);
+          actor.group.rotation.y = dampAngle(actor.group.rotation.y, goal.yaw, 9, stepTime);
+          actor.legA.rotation.x = damp(actor.legA.rotation.x, 0, 10, stepTime);
+          actor.legB.rotation.x = damp(actor.legB.rotation.x, 0, 10, stepTime);
+          const armTarget = workPose ? -1.05 : 0;
+          actor.armA.rotation.x = damp(actor.armA.rotation.x, armTarget, 9, stepTime);
+          actor.armB.rotation.x = damp(actor.armB.rotation.x, armTarget, 9, stepTime);
+          actor.torso.rotation.x = damp(actor.torso.rotation.x, workPose ? 0.36 : 0, 8, stepTime);
+        }
+      }
+    },
+    resetPitCrew(box = playerPitBox) {
+      if (!box?.crew) return;
+      for (const actor of box.crew) {
+        actor.x = actor.idle.x;
+        actor.z = actor.idle.z;
+        actor.walk = Math.random() * TAU;
+        actor.idleT = Math.random() * TAU;
+        actor.group.position.set(actor.x, 0, actor.z);
+        actor.group.rotation.y = actor.idle.yaw;
+        actor.legA.rotation.x = 0;
+        actor.legB.rotation.x = 0;
+        actor.armA.rotation.x = 0;
+        actor.armB.rotation.x = 0;
+        actor.torso.rotation.x = 0;
+      }
     },
     dispose() {
       disposeObject(scene);

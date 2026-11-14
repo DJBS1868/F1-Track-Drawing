@@ -264,6 +264,63 @@ function freshPitWheels() {
   return { fl: 'old', fr: 'old', rl: 'old', rr: 'old' };
 }
 
+// Each wheel group is a child of the car root, so a removed tyre can be laid
+// out beside the car without leaving the car's local frame. The corners line up
+// with the order used by createCar(): FL, FR, RL, RR.
+const PIT_WHEEL_INDEX = { fl: 0, fr: 1, rl: 2, rr: 3 };
+const PIT_WHEEL_REST_OUT = 1.35;
+const PIT_WHEEL_REST_ALONG = 1.05;
+
+function ensurePitWheelBase(w) {
+  if (w.pitBase) return;
+  w.pitBase = {
+    x: w.steer.position.x,
+    y: w.steer.position.y,
+    z: w.steer.position.z
+  };
+  w.pitOut = Math.sign(w.steer.position.x) || 1;
+  w.pitRest = {
+    x: w.pitBase.x + w.pitOut * PIT_WHEEL_REST_OUT,
+    y: w.width * 0.5 + 0.015,
+    z: w.pitBase.z + (w.z > 0 ? PIT_WHEEL_REST_ALONG : -PIT_WHEEL_REST_ALONG)
+  };
+  w.pitBlend = 0;
+}
+
+function resetPitWheelVisuals() {
+  const car = race?.playerCar;
+  if (!car) return;
+  for (const w of car.wheels) {
+    ensurePitWheelBase(w);
+    w.pitBlend = 0;
+    w.steer.position.set(w.pitBase.x, w.pitBase.y, w.pitBase.z);
+    w.steer.rotation.z = 0;
+    w.steer.visible = true;
+  }
+}
+
+function updatePitWheelVisuals(dt) {
+  const car = race?.playerCar;
+  if (!car) return;
+  const wheels = race.pit?.wheels || freshPitWheels();
+  for (const key of PIT_WHEELS) {
+    const w = car.wheels[PIT_WHEEL_INDEX[key]];
+    if (!w) continue;
+    ensurePitWheelBase(w);
+    const target = wheels[key] === 'removed' ? 1 : 0;
+    w.pitBlend = damp(w.pitBlend, target, 10, dt);
+    if (Math.abs(w.pitBlend - target) < 0.005) w.pitBlend = target;
+    const t = smoothstep(0, 1, w.pitBlend);
+    w.steer.position.x = lerp(w.pitBase.x, w.pitRest.x, t);
+    w.steer.position.y = lerp(w.pitBase.y, w.pitRest.y, t);
+    w.steer.position.z = lerp(w.pitBase.z, w.pitRest.z, t);
+    w.steer.rotation.z = w.pitOut * (Math.PI / 2) * t;
+    if (t > 0.001 && t < 0.999) {
+      w.spin.rotation.x += dt * (3.2 + t * 8) * w.pitOut;
+    }
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    UI helpers
    ═══════════════════════════════════════════════════════════════════ */
@@ -1421,6 +1478,8 @@ function resetRaceState() {
   r.gapShown = {};
   r.state = 'countdown';
   r.world.setStartLights(0);
+  r.world.resetPitCrew(r.world.playerPitBox);
+  resetPitWheelVisuals();
   r.smoke.reset();
   audio.setPaused(false);
 
@@ -1757,8 +1816,22 @@ function pitMetrics() {
   };
 }
 
+// The crew waits at the corners of the player's box. Once the car is inside the
+// final approach they step in to one tyre each, and stay there while the stop is
+// serviced before walking back as the car rejoins the lane.
+function updatePitCrewVisual(dt) {
+  const box = race.world?.playerPitBox;
+  if (!box || !race.world.updatePitCrew) return;
+  const pit = race.pit;
+  const { boxDistance } = pitMetrics();
+  const deployed = pit.phase === 'servicing'
+    || (pit.phase === 'driving-in' && boxDistance - pit.routeProgress <= PIT_CREW_DEPLOY_DISTANCE);
+  race.world.updatePitCrew(dt, box, deployed, pit.phase === 'servicing');
+}
+
 const PIT_LIMITER_SPEED = 24;
 const PIT_BOX_MERGE = 36;
+const PIT_CREW_DEPLOY_DISTANCE = 12;
 
 // Cars pull out of the through-lane and steer left towards their garage, then
 // merge back to the centre when they leave. The right side of the lane stays
@@ -2988,6 +3061,7 @@ function showPitMini() {
   const pit = race.pit;
   pit.serviceStage = 'remove';
   pit.wheels = freshPitWheels();
+  resetPitWheelVisuals();
   dom.pitMini.style.setProperty('--pit-paint', playerLivery.body || '#ff4d1f');
   dom.pitMini.classList.add('show');
   dom.pitMini.setAttribute('aria-hidden', 'false');
@@ -3493,6 +3567,8 @@ function updateRace(dt) {
     resolveCarCollisions(dt);
     updatePlayerVisual(dt);
     updatePlayerProgress(dt);
+    updatePitCrewVisual(dt);
+    updatePitWheelVisuals(dt);
     recordGapHistory();
     race.smoke.update(dt);
     updateRaceCamera(dt);
