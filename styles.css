@@ -789,23 +789,23 @@ a { color: inherit; }
   opacity: 1; visibility: visible; pointer-events: auto;
   transform: translate(-50%, 0) scale(1);
 }
-.pit-mini-hit {
+.pit-mini {
+  --wheel-ring: 255, 77, 31;
+}
+.pit-mini[data-stage="fit"] { --wheel-ring: 182, 255, 92; }
+.pit-mini-card {
   display: flex; align-items: center; gap: 16px; width: 100%;
   padding: 12px 16px; margin: 0; text-align: left;
-  color: var(--cream); cursor: pointer; touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
+  color: var(--cream);
   background: linear-gradient(155deg, rgba(15,17,22,.98), rgba(8,10,14,.95));
   border: 1px solid rgba(255,77,31,.5); border-left: 3px solid var(--orange);
   box-shadow: 0 18px 60px rgba(0,0,0,.6), 0 0 38px rgba(255,77,31,.12);
   clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
-  transition: border-color .25s, background .25s, transform .12s;
+  transition: border-color .25s, background .25s;
 }
-.pit-mini-hit:hover .pit-mini-action,
-.pit-mini-hit:focus-visible .pit-mini-action { background: rgba(255,77,31,.28); }
-.pit-mini-hit:active { transform: scale(.985); }
 .pit-mini-visual { position: relative; flex: 0 0 auto; display: grid; place-items: center; }
 .pit-mini-car {
-  display: block; width: clamp(68px, 10vw, 92px); height: auto;
+  display: block; width: clamp(92px, 9vw, 108px); height: auto; overflow: visible;
   filter: drop-shadow(0 10px 18px rgba(0,0,0,.45));
 }
 .pit-mini-wing { fill: #2a2f37; }
@@ -815,32 +815,79 @@ a { color: inherit; }
 .pit-mini-halo { fill: none; stroke: #6b727d; stroke-width: 2.5; }
 .pit-mini-engine { fill: rgba(10,10,12,.35); }
 .pit-mini-nose { fill: rgba(255,255,255,.35); }
+
+/* Every wheel is its own target: the HTML buttons sit over the SVG corners so
+   they keep a finger-sized hit area while the car itself stays compact. */
+.pit-mini-wheel-btn {
+  position: absolute; z-index: 1; width: 46px; height: 46px; margin: 0; padding: 0;
+  transform: translate(-50%, -50%);
+  border: 0; border-radius: 50%; background: none;
+  cursor: pointer; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.pit-mini-wheel-btn[data-wheel="fl"] { left: 21.4%; top: 35.6%; }
+.pit-mini-wheel-btn[data-wheel="fr"] { left: 78.6%; top: 35.6%; }
+.pit-mini-wheel-btn[data-wheel="rl"] { left: 19.7%; top: 76%; }
+.pit-mini-wheel-btn[data-wheel="rr"] { left: 80.3%; top: 76%; }
+.pit-mini-wheel-btn::before {
+  content: ""; position: absolute; inset: 5px; border-radius: 50%;
+  border: 2px solid transparent; background: transparent;
+  opacity: 0; transform: scale(.78);
+  transition: opacity .18s, transform .22s var(--ease), background .18s, border-color .18s;
+}
+.pit-mini[data-stage="remove"] .pit-mini-wheel-btn:not(:disabled)::before,
+.pit-mini[data-stage="fit"] .pit-mini-wheel-btn:not(:disabled)::before {
+  opacity: 1; transform: scale(1);
+  border-color: rgba(var(--wheel-ring), .9);
+  background: rgba(var(--wheel-ring), .1);
+  animation: pit-wheel-pulse 1.5s infinite;
+}
+.pit-mini-wheel-btn:not(:disabled):hover::before { background: rgba(var(--wheel-ring), .3); }
+.pit-mini-wheel-btn:focus-visible {
+  outline: 2px solid rgba(255,255,255,.85); outline-offset: -3px;
+}
+.pit-mini-wheel-btn:disabled { cursor: default; pointer-events: none; }
+@keyframes pit-wheel-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--wheel-ring), .42); }
+  65% { box-shadow: 0 0 0 9px rgba(var(--wheel-ring), 0); }
+}
+
 .pit-mini-wheel { fill: #15181d; stroke: #454b55; stroke-width: 2; }
 .pit-mini-wheel .rim { fill: #8e949e; stroke: none; }
-.wheel-old .pit-mini-wheel { fill: #1d1a18; stroke: #575048; }
-.wheel-old .rim { fill: #7c7468; }
-.wheel-new .pit-mini-wheel { fill: #101318; stroke: #748c55; }
-.wheel-new .rim { fill: var(--good); }
-.wheel-old, .wheel-new { transition: opacity .2s; }
-.wheel-new { opacity: 0; }
-.pit-mini[data-stage="fit"] .wheel-new,
-.pit-mini[data-stage="done"] .wheel-new { opacity: 1; }
-.pit-mini[data-stage="fit"] .wheel-old,
-.pit-mini[data-stage="done"] .wheel-old { opacity: 0; }
-.pit-mini-tap {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  width: 44px; height: 44px; border-radius: 50%;
-  display: grid; place-items: center; pointer-events: none;
-  font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: .14em;
-  color: #140b07; background: rgba(255,77,31,.95);
-  animation: pit-tap-pulse 1.5s infinite;
+.pit-mini-old-wheel { fill: #1d1a18; stroke: #575048; }
+.pit-mini-old-wheel .rim { fill: #7c7468; }
+.pit-mini-new-wheel { fill: #101318; stroke: #748c55; }
+.pit-mini-new-wheel .rim { fill: var(--good); }
+.pit-mini-hub {
+  fill: #10141a; stroke: #59616c; stroke-width: 2; opacity: .25;
+  transition: opacity .22s, fill .22s, stroke .22s;
 }
-.pit-mini[data-stage="done"] .pit-mini-tap { display: none; }
-@keyframes pit-tap-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(255,77,31,.5); }
-  70% { box-shadow: 0 0 0 14px rgba(255,77,31,0); }
-  100% { box-shadow: 0 0 0 0 rgba(255,77,31,0); }
+.pit-mini-corner[data-state="removed"] .pit-mini-hub { opacity: 1; }
+.pit-mini-corner[data-state="new"] .pit-mini-hub { opacity: .2; }
+.pit-mini[data-stage="fit"] .pit-mini-corner[data-state="removed"] .pit-mini-hub {
+  animation: pit-hub-pulse 1.5s infinite;
 }
+@keyframes pit-hub-pulse {
+  0%, 100% { fill: #10141a; stroke: #59616c; }
+  50% { fill: rgba(182,255,92,.24); stroke: var(--good); }
+}
+.pit-mini-old-wheel, .pit-mini-new-wheel {
+  transform-box: fill-box; transform-origin: center;
+}
+.pit-mini-old-wheel {
+  transition: transform .38s var(--ease), opacity .26s ease;
+}
+.pit-mini-new-wheel {
+  opacity: 0;
+  transform: translate(var(--wx), var(--wy)) rotate(var(--rot)) scale(.72);
+  transition: transform .42s var(--ease), opacity .26s ease;
+}
+.pit-mini-corner[data-state="removed"] .pit-mini-old-wheel,
+.pit-mini-corner[data-state="new"] .pit-mini-old-wheel {
+  opacity: 0;
+  transform: translate(var(--wx), var(--wy)) rotate(var(--rot)) scale(.72);
+}
+.pit-mini-corner[data-state="new"] .pit-mini-new-wheel { opacity: 1; transform: none; }
 .pit-mini-info { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .pit-mini-top {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -853,12 +900,20 @@ a { color: inherit; }
   letter-spacing: .035em; text-transform: uppercase;
 }
 .pit-mini-info small { font-family: var(--font-mono); font-size: 8px; letter-spacing: .16em; color: #c9c3b5; }
-.pit-mini-dots { display: flex; gap: 5px; margin: 4px 0 2px; }
-.pit-mini-dots i { width: 18px; height: 3px; background: rgba(255,255,255,.14); transition: background .2s, box-shadow .2s; }
-.pit-mini[data-stage="remove"] .pit-mini-dots i:nth-child(1) { background: var(--orange); box-shadow: 0 0 8px rgba(255,77,31,.6); }
-.pit-mini[data-stage="fit"] .pit-mini-dots i:nth-child(1) { background: var(--good); }
-.pit-mini[data-stage="fit"] .pit-mini-dots i:nth-child(2) { background: var(--orange); box-shadow: 0 0 8px rgba(255,77,31,.6); }
-.pit-mini[data-stage="done"] .pit-mini-dots i { background: var(--good); box-shadow: 0 0 8px rgba(182,255,92,.45); }
+.pit-mini-wheels { display: flex; gap: 4px; margin: 4px 0 2px; }
+.pit-mini-wheels i {
+  min-width: 22px; padding: 2px 4px; text-align: center;
+  font-family: var(--font-mono); font-style: normal; font-size: 7px; letter-spacing: .08em;
+  color: #737881; border: 1px solid rgba(255,255,255,.13);
+  transition: color .2s, border-color .2s, background .2s;
+}
+.pit-mini[data-stage="remove"] .pit-mini-wheels i.is-off {
+  color: var(--orange); border-color: rgba(255,77,31,.6); background: rgba(255,77,31,.14);
+}
+.pit-mini[data-stage="fit"] .pit-mini-wheels i.is-off { color: #6e737b; }
+.pit-mini .pit-mini-wheels i.is-new {
+  color: var(--good); border-color: rgba(182,255,92,.55); background: rgba(182,255,92,.1);
+}
 .pit-mini-action {
   align-self: flex-start; margin-top: 3px; padding: 6px 12px;
   font-family: var(--font-mono); font-size: 8.5px; letter-spacing: .16em;
@@ -866,10 +921,8 @@ a { color: inherit; }
   border: 1px solid rgba(255,77,31,.55);
   transition: background .2s, border-color .2s;
 }
-.pit-mini-action em { font-style: normal; color: var(--orange); margin-left: 4px; }
-.pit-mini[data-stage="done"] .pit-mini-hit { border-color: rgba(182,255,92,.55); border-left-color: var(--good); }
+.pit-mini[data-stage="done"] .pit-mini-card { border-color: rgba(182,255,92,.55); border-left-color: var(--good); }
 .pit-mini[data-stage="done"] .pit-mini-action { background: rgba(182,255,92,.12); border-color: rgba(182,255,92,.5); }
-.pit-mini[data-stage="done"] .pit-mini-action em { color: var(--good); }
 #race-hud.has-pit-mini .touch-controls {
   opacity: 0; pointer-events: none; transition: opacity .2s;
 }
@@ -1255,23 +1308,25 @@ a { color: inherit; }
 
 @media (max-width: 560px) {
   .pit-mini { bottom: max(10px, env(safe-area-inset-bottom)); width: calc(100vw - 16px); }
-  .pit-mini-hit { gap: 12px; padding: 10px 12px; }
-  .pit-mini-car { width: 64px; }
+  .pit-mini-card { gap: 12px; padding: 10px 12px; }
+  .pit-mini-car { width: 92px; }
+  .pit-mini-wheel-btn { width: 44px; height: 44px; }
   .pit-mini-info strong { font-size: 27px; }
   .pit-mini-info small { font-size: 7px; letter-spacing: .12em; }
-  .pit-mini-tap { width: 38px; height: 38px; font-size: 7px; }
+  .pit-mini-wheels i { min-width: 20px; padding: 2px 3px; }
 }
 
 /* Short landscape phones: shrink the card so it never swallows the camera. */
 @media (pointer: coarse) and (max-height: 520px) {
   .pit-mini { bottom: 8px; width: min(420px, calc(100vw - 20px)); }
-  .pit-mini-hit { gap: 12px; padding: 8px 12px; }
-  .pit-mini-car { width: 48px; }
+  .pit-mini-card { gap: 12px; padding: 8px 12px; }
+  .pit-mini-car { width: 88px; }
+  .pit-mini-wheel-btn { width: 44px; height: 44px; }
   .pit-mini-info strong { font-size: 24px; }
   .pit-mini-info small { display: none; }
-  .pit-mini-dots { margin: 2px 0 1px; }
+  .pit-mini-wheels { margin: 2px 0 1px; }
+  .pit-mini-wheels i { min-width: 19px; padding: 1px 3px; font-size: 6.5px; }
   .pit-mini-action { margin-top: 1px; padding: 4px 9px; font-size: 7.5px; }
-  .pit-mini-tap { width: 32px; height: 32px; font-size: 6.5px; }
 }
 
 /* Short viewports: the menu must never hide its primary actions. */

@@ -43,7 +43,7 @@ const dom = {
   raceMessage: $('race-message'), offTrack: $('off-track'),
   pitCall: $('pit-call'), pitCallMain: $('pit-call-main'), pitCallSub: $('pit-call-sub'),
   pitCallProgress: $('pit-call-progress'),
-  pitMini: $('pit-mini'), pitMiniHit: $('pit-mini-hit'), pitMiniStep: $('pit-mini-step'),
+  pitMini: $('pit-mini'), pitMiniStep: $('pit-mini-step'),
   pitMiniTitle: $('pit-mini-title'), pitMiniSub: $('pit-mini-sub'), pitMiniAction: $('pit-mini-action'),
   countdown: $('countdown'), countdownValue: $('countdown-value'),
   controlsHint: $('controls-hint'), touchControls: $('touch-controls'),
@@ -253,6 +253,16 @@ const PIT_CALL_LINES = [
   { main: 'BOX BOX', sub: 'TEAM RADIO · NEW TYRES IN THE BOX' },
   { main: 'COME IN, BOX', sub: 'BOX 07 · FRESH SET WAITING' }
 ];
+
+/* Each corner is serviced on its own: four taps to take the old tyres off,
+   then four more to fit the new set on the same corners. */
+const PIT_WHEELS = ['fl', 'fr', 'rl', 'rr'];
+const PIT_WHEEL_LABELS = {
+  fl: 'front left', fr: 'front right', rl: 'rear left', rr: 'rear right'
+};
+function freshPitWheels() {
+  return { fl: 'old', fr: 'old', rl: 'old', rr: 'old' };
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    UI helpers
@@ -1125,6 +1135,7 @@ function enterRace(trackData) {
       entryProgress: 0,
       serviceTimer: 0,
       serviceStage: null,
+      wheels: freshPitWheels(),
       stops: 0
     },
     world,
@@ -1202,6 +1213,7 @@ function resetRaceState() {
   r.pit.entryProgress = 0;
   r.pit.serviceTimer = 0;
   r.pit.serviceStage = null;
+  r.pit.wheels = freshPitWheels();
   r.pit.stops = 0;
   hidePitCall();
   hidePitMini();
@@ -1731,9 +1743,10 @@ function updatePitPhysics(dt, p) {
     p.throttle = 0; p.brake = 1; p.steer = 0;
     p.offroad = false; p.offTimer = 0;
     if (!pit.serviceStage) pit.serviceStage = 'remove';
-    // The stop is only released once both taps have been made. A short pause
-    // after fitting the new set lets the wheel animation land before the car
-    // pulls away.
+    if (!pit.wheels) pit.wheels = freshPitWheels();
+    // The stop is only released once every corner has been stripped and then
+    // rebuilt. A short pause after fitting the final wheel lets the animation
+    // land before the car pulls away.
     if (pit.serviceStage === 'done') {
       pit.serviceTimer = Math.max(0, pit.serviceTimer - dt);
       if (pit.serviceTimer <= 0) {
@@ -1829,7 +1842,7 @@ function advancePitRoute(dt, p) {
     pit.serviceStage = 'remove';
     pit.serviceTimer = 0;
     showPitMini();
-    showPitCall('PIT STOP', 'TAP TO CHANGE THE TYRES', { kind: 'service' });
+    showPitCall('PIT STOP', 'REMOVE EACH WHEEL · FIT EACH WHEEL', { kind: 'service' });
     audio.tone(620, 0.12, 0.05, 'triangle');
   } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1) {
     pit.routeProgress = routeLength;
@@ -2807,18 +2820,88 @@ function hidePitCall() {
   dom.hud?.classList.remove('has-pit-call');
 }
 
+function pitWheelButtons() {
+  if (!dom.pitMini) return [];
+  return [...dom.pitMini.querySelectorAll('.pit-mini-wheel-btn')];
+}
+
+function pitWheelCounts(wheels) {
+  let off = 0;
+  let on = 0;
+  for (const key of PIT_WHEELS) {
+    if (wheels?.[key] && wheels[key] !== 'old') off++;
+    if (wheels?.[key] === 'new') on++;
+  }
+  return { off, on };
+}
+
+function syncPitMini() {
+  if (!dom.pitMini || !race?.pit) return;
+  const pit = race.pit;
+  const wheels = pit.wheels || freshPitWheels();
+  const stage = pit.serviceStage || 'remove';
+  const { off, on } = pitWheelCounts(wheels);
+
+  dom.pitMini.dataset.stage = stage;
+  for (const corner of dom.pitMini.querySelectorAll('.pit-mini-corner')) {
+    corner.dataset.state = wheels[corner.dataset.wheel] || 'old';
+  }
+  for (const chip of dom.pitMini.querySelectorAll('.pit-mini-wheels i')) {
+    const state = wheels[chip.dataset.wheel] || 'old';
+    chip.classList.toggle('is-off', state !== 'old');
+    chip.classList.toggle('is-new', state === 'new');
+  }
+  for (const button of pitWheelButtons()) {
+    const state = wheels[button.dataset.wheel] || 'old';
+    const available = stage === 'remove'
+      ? state === 'old'
+      : stage === 'fit' ? state === 'removed' : false;
+    button.disabled = !available;
+    const label = PIT_WHEEL_LABELS[button.dataset.wheel];
+    button.setAttribute('aria-label', stage === 'remove'
+      ? `Remove ${label} tyre`
+      : stage === 'fit'
+        ? `Fit new ${label} tyre`
+        : `${label} tyre ${state === 'new' ? 'fitted' : 'removed'}`);
+  }
+
+  if (stage === 'remove') {
+    dom.pitMiniStep.textContent = `${off} / 4 OFF`;
+    dom.pitMiniTitle.textContent = 'OLD TYRES';
+    dom.pitMiniSub.textContent = 'TAP EACH WHEEL TO REMOVE IT';
+    dom.pitMiniAction.textContent = `${4 - off} WHEEL${4 - off === 1 ? '' : 'S'} TO REMOVE`;
+  } else if (stage === 'fit') {
+    dom.pitMiniStep.textContent = `${on} / 4 ON`;
+    dom.pitMiniTitle.textContent = 'NEW TYRES';
+    dom.pitMiniSub.textContent = 'TAP EACH CORNER TO FIT THE NEW SET';
+    dom.pitMiniAction.textContent = `${4 - on} WHEEL${4 - on === 1 ? '' : 'S'} TO FIT`;
+  } else {
+    dom.pitMiniStep.textContent = 'DONE';
+    dom.pitMiniTitle.textContent = 'TYRES FITTED';
+    dom.pitMiniSub.textContent = 'RELEASING THE CAR';
+    dom.pitMiniAction.textContent = 'GO';
+  }
+}
+
+function focusNextPitWheel() {
+  const next = pitWheelButtons().find((button) => !button.disabled);
+  if (next) {
+    next.focus({ preventScroll: true });
+  } else if (dom.pitMini?.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+}
+
 function showPitMini() {
   if (!dom.pitMini) return;
   const pit = race.pit;
   pit.serviceStage = 'remove';
-  dom.pitMini.dataset.stage = 'remove';
+  pit.wheels = freshPitWheels();
   dom.pitMini.style.setProperty('--pit-paint', playerLivery.body || '#ff4d1f');
   dom.pitMini.classList.add('show');
   dom.pitMini.setAttribute('aria-hidden', 'false');
-  dom.pitMiniStep.textContent = '01 / 02';
-  dom.pitMiniTitle.textContent = 'OLD TYRES';
-  dom.pitMiniSub.textContent = 'TAP TO REMOVE THE WORN SET';
-  dom.pitMiniAction.innerHTML = 'REMOVE TYRES <em>›</em>';
+  syncPitMini();
+  focusNextPitWheel();
   dom.hud?.classList.add('has-pit-mini');
   // Drop any held touch controls before hiding them, otherwise a finger that
   // was on the throttle when the car docked could stay latched down.
@@ -2830,44 +2913,55 @@ function showPitMini() {
 }
 
 function hidePitMini() {
+  if (dom.pitMini?.contains(document.activeElement)) document.activeElement.blur();
   dom.pitMini?.classList.remove('show');
   dom.pitMini?.setAttribute('aria-hidden', 'true');
   dom.hud?.classList.remove('has-pit-mini');
 }
 
-function advancePitMini() {
+function advancePitMini(corner) {
   const pit = race?.pit;
   if (!pit || pit.phase !== 'servicing' || race.state !== 'racing') return;
-  if (pit.serviceStage === 'remove') {
+  if (!pit.wheels) pit.wheels = freshPitWheels();
+  const stage = pit.serviceStage;
+  if (stage !== 'remove' && stage !== 'fit') return;
+
+  const wanted = stage === 'remove' ? 'old' : 'removed';
+  const nextState = stage === 'remove' ? 'removed' : 'new';
+  const available = PIT_WHEELS.filter((key) => pit.wheels[key] === wanted);
+  // A click is tied to the corner that was tapped. Keyboard taps may not name
+  // one, so they service the first corner still waiting.
+  const target = corner && available.includes(corner) ? corner : corner ? null : available[0];
+  if (!target) return;
+
+  pit.wheels[target] = nextState;
+  const { off, on } = pitWheelCounts(pit.wheels);
+  if (stage === 'remove' && off === PIT_WHEELS.length) {
     pit.serviceStage = 'fit';
-    dom.pitMini.dataset.stage = 'fit';
-    dom.pitMiniStep.textContent = '02 / 02';
-    dom.pitMiniTitle.textContent = 'NEW TYRES';
-    dom.pitMiniSub.textContent = 'TAP TO FIT THE FRESH SET';
-    dom.pitMiniAction.innerHTML = 'FIT TYRES <em>›</em>';
-    audio.tone(560, 0.09, 0.04, 'triangle');
-  } else if (pit.serviceStage === 'fit') {
+    audio.tone(560, 0.11, 0.045, 'triangle');
+  } else if (stage === 'fit' && on === PIT_WHEELS.length) {
     pit.serviceStage = 'done';
     pit.serviceTimer = 0.85;
-    dom.pitMini.dataset.stage = 'done';
-    dom.pitMiniStep.textContent = 'DONE';
-    dom.pitMiniTitle.textContent = 'TYRES FITTED';
-    dom.pitMiniSub.textContent = 'RELEASING THE CAR';
-    dom.pitMiniAction.innerHTML = 'GO <em>›</em>';
     audio.tone(820, 0.16, 0.05, 'triangle');
+  } else {
+    audio.tone(stage === 'remove' ? 430 + off * 42 : 690 + on * 46, 0.08, 0.04, 'triangle');
   }
+  syncPitMini();
+  updatePitServiceBanner();
+  focusNextPitWheel();
 }
 
 function updatePitServiceBanner() {
   const pit = race.pit;
   if (pit.phase !== 'servicing') return;
   const stage = pit.serviceStage || 'remove';
+  const { off, on } = pitWheelCounts(pit.wheels);
   dom.pitCallSub.textContent = stage === 'remove'
-    ? 'OLD TYRES · TAP TO REMOVE'
+    ? `OLD TYRES · ${off}/4 REMOVED`
     : stage === 'fit'
-      ? 'NEW SET READY · TAP TO FIT'
+      ? `NEW TYRES · ${on}/4 FITTED`
       : 'TYRES FITTED · GO';
-  dom.pitCallProgress.style.width = stage === 'remove' ? '0%' : stage === 'fit' ? '55%' : '100%';
+  dom.pitCallProgress.style.width = `${((off + on) / (PIT_WHEELS.length * 2)) * 100}%`;
 }
 
 function showRaceMessage(main, sub = '', duration = 1900, final = false) {
