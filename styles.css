@@ -853,7 +853,27 @@ a { color: inherit; }
 }
 
 .pit-mini-wheel { fill: #15181d; stroke: #454b55; stroke-width: 2; }
-.pit-mini-wheel .rim { fill: #8e949e; stroke: none; }
+.pit-mini-wheel .rim {
+  fill: #8e949e; stroke: none;
+  transform-box: fill-box; transform-origin: center;
+}
+/* One wheel at a time: the tapped corner's nut spins off, and the replacement
+   spins back on when that same corner is tapped again in the fitting stage. */
+.pit-mini-corner[data-motion="remove"] .pit-mini-old-wheel .rim {
+  animation: pit-nut-unscrew .5s cubic-bezier(.35, 0, .25, 1);
+}
+.pit-mini-corner[data-motion="fit"] .pit-mini-new-wheel .rim {
+  animation: pit-nut-screw .5s cubic-bezier(.35, 0, .25, 1);
+}
+@keyframes pit-nut-unscrew {
+  0% { transform: rotate(0deg); }
+  70% { transform: rotate(-330deg) scale(1.18); }
+  100% { transform: rotate(-360deg); }
+}
+@keyframes pit-nut-screw {
+  0% { transform: rotate(-320deg) scale(.72); }
+  100% { transform: rotate(0deg) scale(1); }
+}
 .pit-mini-old-wheel { fill: #1d1a18; stroke: #575048; }
 .pit-mini-old-wheel .rim { fill: #7c7468; }
 .pit-mini-new-wheel { fill: #101318; stroke: #748c55; }

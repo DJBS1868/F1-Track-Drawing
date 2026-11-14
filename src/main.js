@@ -1842,7 +1842,7 @@ function advancePitRoute(dt, p) {
     pit.serviceStage = 'remove';
     pit.serviceTimer = 0;
     showPitMini();
-    showPitCall('PIT STOP', 'REMOVE EACH WHEEL · FIT EACH WHEEL', { kind: 'service' });
+    showPitCall('PIT STOP', 'UNSCREW EACH WHEEL · THEN SCREW ON EACH WHEEL', { kind: 'service' });
     audio.tone(620, 0.12, 0.05, 'triangle');
   } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1) {
     pit.routeProgress = routeLength;
@@ -2859,22 +2859,22 @@ function syncPitMini() {
     button.disabled = !available;
     const label = PIT_WHEEL_LABELS[button.dataset.wheel];
     button.setAttribute('aria-label', stage === 'remove'
-      ? `Remove ${label} tyre`
+      ? `Unscrew ${label} tyre`
       : stage === 'fit'
-        ? `Fit new ${label} tyre`
+        ? `Screw on new ${label} tyre`
         : `${label} tyre ${state === 'new' ? 'fitted' : 'removed'}`);
   }
 
   if (stage === 'remove') {
     dom.pitMiniStep.textContent = `${off} / 4 OFF`;
-    dom.pitMiniTitle.textContent = 'OLD TYRES';
-    dom.pitMiniSub.textContent = 'TAP EACH WHEEL TO REMOVE IT';
-    dom.pitMiniAction.textContent = `${4 - off} WHEEL${4 - off === 1 ? '' : 'S'} TO REMOVE`;
+    dom.pitMiniTitle.textContent = 'UNSCREW OLD TYRES';
+    dom.pitMiniSub.textContent = 'TAP EACH WHEEL SEPARATELY TO UNSCREW IT';
+    dom.pitMiniAction.textContent = `${4 - off} WHEEL${4 - off === 1 ? '' : 'S'} TO UNSCREW`;
   } else if (stage === 'fit') {
     dom.pitMiniStep.textContent = `${on} / 4 ON`;
-    dom.pitMiniTitle.textContent = 'NEW TYRES';
-    dom.pitMiniSub.textContent = 'TAP EACH CORNER TO FIT THE NEW SET';
-    dom.pitMiniAction.textContent = `${4 - on} WHEEL${4 - on === 1 ? '' : 'S'} TO FIT`;
+    dom.pitMiniTitle.textContent = 'SCREW ON NEW TYRES';
+    dom.pitMiniSub.textContent = 'TAP EACH CORNER SEPARATELY TO SCREW IT ON';
+    dom.pitMiniAction.textContent = `${4 - on} WHEEL${4 - on === 1 ? '' : 'S'} TO SCREW ON`;
   } else {
     dom.pitMiniStep.textContent = 'DONE';
     dom.pitMiniTitle.textContent = 'TYRES FITTED';
@@ -2935,6 +2935,15 @@ function advancePitMini(corner) {
   if (!target) return;
 
   pit.wheels[target] = nextState;
+  // Spin the nut on the corner that was actually tapped. Each wheel gets its
+  // own animation so four separate taps visibly unscrew four separate wheels.
+  const cornerEl = dom.pitMini?.querySelector(`.pit-mini-corner[data-wheel="${target}"]`);
+  if (cornerEl) {
+    cornerEl.dataset.motion = stage;
+    setTimeout(() => {
+      if (cornerEl.dataset.motion === stage) delete cornerEl.dataset.motion;
+    }, 520);
+  }
   const { off, on } = pitWheelCounts(pit.wheels);
   if (stage === 'remove' && off === PIT_WHEELS.length) {
     pit.serviceStage = 'fit';
@@ -2957,9 +2966,9 @@ function updatePitServiceBanner() {
   const stage = pit.serviceStage || 'remove';
   const { off, on } = pitWheelCounts(pit.wheels);
   dom.pitCallSub.textContent = stage === 'remove'
-    ? `OLD TYRES · ${off}/4 REMOVED`
+    ? `UNSCREWING · ${off}/4 OLD TYRES OFF`
     : stage === 'fit'
-      ? `NEW TYRES · ${on}/4 FITTED`
+      ? `SCREWING ON · ${on}/4 NEW TYRES`
       : 'TYRES FITTED · GO';
   dom.pitCallProgress.style.width = `${((off + on) / (PIT_WHEELS.length * 2)) * 100}%`;
 }
@@ -3788,10 +3797,14 @@ function wireEvents() {
   dom.btnNewTrack.addEventListener('click', goToDraw);
   dom.btnRaceAgain.addEventListener('click', restartRace);
   dom.btnResultsNew.addEventListener('click', goToDraw);
-  dom.pitMiniHit?.addEventListener('click', (e) => {
+  // Each corner has its own hit target. A tap only ever services the wheel
+  // under the finger: there is deliberately no "change all four" control.
+  dom.pitMini?.addEventListener('click', (e) => {
+    const button = e.target.closest('.pit-mini-wheel-btn');
+    if (!button || button.disabled) return;
     e.preventDefault();
     audio.ensure();
-    advancePitMini();
+    advancePitMini(button.dataset.wheel);
   });
   wireTouchControls();
 }
