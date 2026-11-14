@@ -678,32 +678,119 @@ export function createRaceWorld(track) {
   makeGrandstand(track.N - Math.round(34 / track.step), 42);
   makeGrandstand(track.N - Math.round(95 / track.step), 34);
 
-  /* ── pit building ────────────────────────────────────────────── */
-  const pitIdx = (track.N - Math.round(52 / track.step) + track.N) % track.N;
-  const pitSample = track.samples[pitIdx];
-  const pit = new THREE.Group();
-  const pitBody = new THREE.Mesh(new THREE.BoxGeometry(64, 9, 12), new THREE.MeshStandardMaterial({ color: 0xe4dfd3, roughness: 0.7, metalness: 0.1 }));
-  pitBody.position.y = 4.5;
-  pitBody.castShadow = true;
-  pitBody.receiveShadow = true;
-  pit.add(pitBody);
-  const garageTex = garageTexture();
-  disposables.push(garageTex);
-  const garage = new THREE.Mesh(new THREE.PlaneGeometry(60, 5.4), new THREE.MeshStandardMaterial({ map: garageTex, roughness: 0.8 }));
-  garage.position.set(0, 3.2, 6.06);
-  pit.add(garage);
-  const pitRoof = new THREE.Mesh(new THREE.BoxGeometry(66, 0.5, 14), new THREE.MeshStandardMaterial({ color: 0x1a1d23, roughness: 0.6, metalness: 0.5 }));
-  pitRoof.position.set(0, 9.1, 0);
-  pit.add(pitRoof);
-  for (let i = -5; i <= 5; i += 2) {
-    const window = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 0.1), new THREE.MeshStandardMaterial({ color: 0x2a3a47, roughness: 0.15, metalness: 0.6, emissive: 0x0b1418, emissiveIntensity: 0.5 }));
-    window.position.set(i * 5, 7.1, 6.1);
-    pit.add(window);
+  /* ── pit lane, boxes and ten physical team garages ───────────── */
+  const pitSide = 1;
+  const pitOffset = track.halfWidth + 7.5;
+  const pitEntryDistance = track.length - 190;
+  const pitExitDistance = 190;
+  const pitSpan = 380;
+  const pitSampleAt = (distance) => {
+    const wrapped = ((distance % track.length) + track.length) % track.length;
+    const i = Math.floor(wrapped / track.step) % track.N;
+    const next = track.samples[(i + 1) % track.N];
+    const a = track.samples[i];
+    const f = (wrapped - a.s) / track.step;
+    const mix = (x, y) => x + (y - x) * f;
+    let tx = mix(a.tx, next.tx), tz = mix(a.tz, next.tz);
+    const tangentLength = Math.hypot(tx, tz) || 1;
+    tx /= tangentLength; tz /= tangentLength;
+    const nx = tz, nz = -tx;
+    return { s: wrapped, x: mix(a.x, next.x), z: mix(a.z, next.z), tx, tz, nx, nz };
+  };
+  const pitRoute = [];
+  for (let d = 0; d <= pitSpan; d += 5) {
+    const s = pitSampleAt(pitEntryDistance + d);
+    const ramp = Math.min(1, d / 55, (pitSpan - d) / 55);
+    const lateral = pitSide * pitOffset * Math.max(0, ramp);
+    pitRoute.push({ x: s.x + s.nx * lateral, z: s.z + s.nz * lateral, tx: s.tx, tz: s.tz, trackDistance: s.s });
   }
-  const pitOffset = -(track.halfWidth + 22);
-  pit.position.set(pitSample.x + pitSample.nx * pitOffset, 0, pitSample.z + pitSample.nz * pitOffset);
-  pit.rotation.y = Math.atan2(pitSample.tx, pitSample.tz) + Math.PI / 2;
-  scene.add(pit);
+  const routePositions = [];
+  const routeIndices = [];
+  for (let i = 0; i < pitRoute.length; i++) {
+    const p = pitRoute[i];
+    const nx = p.tz, nz = -p.tx;
+    routePositions.push(p.x + nx * 4.5, 0.025, p.z + nz * 4.5);
+    routePositions.push(p.x - nx * 4.5, 0.025, p.z - nz * 4.5);
+    if (i < pitRoute.length - 1) {
+      const j = i * 2;
+      routeIndices.push(j, j + 2, j + 1, j + 1, j + 2, j + 3);
+    }
+  }
+  const pitRoadGeo = new THREE.BufferGeometry();
+  pitRoadGeo.setAttribute('position', new THREE.Float32BufferAttribute(routePositions, 3));
+  pitRoadGeo.setIndex(routeIndices);
+  pitRoadGeo.computeVertexNormals();
+  const pitRoad = new THREE.Mesh(pitRoadGeo, new THREE.MeshStandardMaterial({ color: 0x34373c, roughness: 0.94, side: THREE.DoubleSide }));
+  pitRoad.receiveShadow = true;
+  scene.add(pitRoad);
+  const pitLineMat = new THREE.MeshStandardMaterial({ color: 0xece7db, roughness: 0.7 });
+  for (const edge of [-1, 1]) {
+    const points = pitRoute.map((p) => new THREE.Vector3(p.x + p.tz * 4.05 * edge, 0.045, p.z - p.tx * 4.05 * edge));
+    const line = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), points.length * 2, 0.055, 5, false), pitLineMat);
+    scene.add(line);
+  }
+  const boxIndex = 38; // The player's box is closest to the start/finish line.
+  const boxColors = [0xe10600, 0x00a19b, 0x0067ff, 0xff8700, 0x2b2b2b, 0x006f62, 0x005aff, 0x900000, 0x00a0dd, 0xffffff];
+  const garageTeams = ['SCUDERIA', 'PAPAYA', 'SILVER', 'ASTON', 'SAUBER', 'ALPINE', 'WILLIAMS', 'HAAS', 'RACING', 'APEX INK'];
+  const playerPitBox = { x: pitRoute[boxIndex].x, z: pitRoute[boxIndex].z, yaw: Math.atan2(pitRoute[boxIndex].tx, pitRoute[boxIndex].tz) };
+  const garages = [];
+  const garageDoorTex = garageTexture();
+  disposables.push(garageDoorTex);
+  for (let i = 0; i < 10; i++) {
+    const routeIndex = 21 + i * 4;
+    const lanePoint = pitRoute[routeIndex];
+    const nx = lanePoint.tz, nz = -lanePoint.tx;
+    const center = { x: lanePoint.x + nx * 10, z: lanePoint.z + nz * 10 };
+    const g = new THREE.Group();
+    const color = boxColors[i];
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d2, roughness: 0.78, metalness: 0.08 });
+    const shell = new THREE.Mesh(new THREE.BoxGeometry(10.2, 7.4, 9), shellMat);
+    shell.position.y = 3.7;
+    shell.castShadow = true;
+    shell.receiveShadow = true;
+    g.add(shell);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.5, 9.6), new THREE.MeshStandardMaterial({ color: 0x22252a, roughness: 0.5, metalness: 0.5 }));
+    roof.position.y = 7.65;
+    roof.castShadow = true;
+    g.add(roof);
+    const fascia = new THREE.Mesh(new THREE.BoxGeometry(9.7, 0.95, 0.18), new THREE.MeshStandardMaterial({ color, roughness: 0.52, metalness: 0.15, emissive: color, emissiveIntensity: 0.12 }));
+    fascia.position.set(0, 6.85, -4.58);
+    g.add(fascia);
+    const door = new THREE.Mesh(new THREE.PlaneGeometry(7.7, 5.25), new THREE.MeshStandardMaterial({ map: garageDoorTex, roughness: 0.82, side: THREE.DoubleSide }));
+    door.position.set(0, 3.05, -4.56);
+    g.add(door);
+    for (const x of [-4.7, 4.7]) {
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.45, 6.1, 0.55), new THREE.MeshStandardMaterial({ color: 0xf0eee8, roughness: 0.75 }));
+      pillar.position.set(x, 3.05, -4.35);
+      g.add(pillar);
+    }
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.12, 8.4), new THREE.MeshStandardMaterial({ color: 0x73777b, roughness: 0.94 }));
+    floor.position.set(0, 0.04, 0.15);
+    g.add(floor);
+    const labelTex = createCanvasTexture([256, 96], (ctx, w, h) => {
+      ctx.fillStyle = '#171a1f'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`; ctx.fillRect(0, 0, 12, h);
+      ctx.fillStyle = '#f5f2eb'; ctx.font = '700 31px Rajdhani'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(`${String(i + 1).padStart(2, '0')}  ${garageTeams[i]}`, w / 2 + 5, h / 2);
+    });
+    disposables.push(labelTex);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(8.7, 2.3), new THREE.MeshStandardMaterial({ map: labelTex, roughness: 0.65, side: THREE.DoubleSide }));
+    sign.position.set(0, 5.25, -4.72);
+    g.add(sign);
+    g.position.set(center.x, 0, center.z);
+    g.rotation.y = Math.atan2(lanePoint.tx, lanePoint.tz) + Math.PI;
+    scene.add(g);
+    garages.push(g);
+  }
+  const pitBoxMark = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.035, 8.2), new THREE.MeshStandardMaterial({ color: 0xffd21f, roughness: 0.8, emissive: 0x503b00, emissiveIntensity: 0.28 }));
+  pitBoxMark.position.set(playerPitBox.x, 0.06, playerPitBox.z);
+  pitBoxMark.rotation.y = playerPitBox.yaw;
+  scene.add(pitBoxMark);
+  const pitBoxNumber = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.4), new THREE.MeshBasicMaterial({ color: 0x171a1f, side: THREE.DoubleSide }));
+  pitBoxNumber.rotation.x = -Math.PI / 2;
+  pitBoxNumber.rotation.z = -playerPitBox.yaw;
+  pitBoxNumber.position.set(playerPitBox.x, 0.085, playerPitBox.z);
+  scene.add(pitBoxNumber);
 
   /* ── advertising boards ─────────────────────────────────────── */
   const sponsors = [
@@ -880,6 +967,8 @@ export function createRaceWorld(track) {
     scene, sky, sun, clouds, dust, startLights, gantry, startLine,
     sunDir,
     startSample: track.start,
+    pitRoute,
+    playerPitBox,
     update(t, dt) {
       clouds.rotation.y = t * 0.0018;
       dust.rotation.y = t * 0.002;

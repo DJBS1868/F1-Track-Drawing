@@ -38,7 +38,7 @@ const dom = {
   hudSpeed: $('hud-speed'), hudGear: $('hud-gear'), speedoFill: $('speedo-fill'),
   speedoTicks: $('speedo-ticks'), throttleFill: $('throttle-fill'),
   minimap: $('minimap'), minimapTrackName: $('minimap-track-name'), hudDrs: $('hud-drs'),
-  hudAssist: $('hud-assist'),
+  hudPit: $('hud-pit'), hudAssist: $('hud-assist'),
   raceMessage: $('race-message'), offTrack: $('off-track'),
   countdown: $('countdown'), countdownValue: $('countdown-value'),
   controlsHint: $('controls-hint'), touchControls: $('touch-controls'),
@@ -1085,6 +1085,13 @@ function enterRace(trackData) {
     track: trackData,
     totalLaps: setup.totalLaps,
     aiCount: setup.aiCount,
+    pit: {
+      phase: 'waiting',
+      callAfterLaps: Math.floor(setup.totalLaps / 2) - 1,
+      routeProgress: 0,
+      entryProgress: 0,
+      serviceTimer: 0
+    },
     world,
     camera,
     playerCar,
@@ -1152,6 +1159,10 @@ function resetRaceState() {
   p.offroad = false; p.offTimer = 0;
   p.lapsCompleted = 0; p.lapStart = 0;
   p.sectors = [false, false, false];
+  r.pit.phase = 'waiting';
+  r.pit.routeProgress = 0;
+  r.pit.entryProgress = 0;
+  r.pit.serviceTimer = 0;
   p.bestLap = readBest(r.track.seed);
   p.lastLap = null; p.topSpeed = 0;
   p.finished = false; p.finishTime = null; p.finishPosition = r.ai.length + 1;
@@ -1564,19 +1575,120 @@ function readControls() {
   };
 }
 
+function pitRoutePoint(distance) {
+  const route = race.world.pitRoute;
+  const d = clamp(distance, 0, (route.length - 1) * 5);
+  const i = Math.min(route.length - 2, Math.floor(d / 5));
+  const t = d / 5 - i;
+  const a = route[i], b = route[i + 1];
+  return {
+    x: a.x + (b.x - a.x) * t,
+    z: a.z + (b.z - a.z) * t,
+    tx: a.tx + (b.tx - a.tx) * t,
+    tz: a.tz + (b.tz - a.tz) * t
+  };
+}
+
+function updatePitPhysics(dt, p) {
+  const pit = race.pit;
+  const routeLength = (race.world.pitRoute.length - 1) * 5;
+  const boxDistance = 190;
+  if (pit.phase === 'called') {
+    const entryDistance = (p.lapsCompleted + 1) * race.track.length - 190;
+    if (p.progressDist >= entryDistance) {
+      pit.phase = 'driving-in';
+      pit.routeProgress = clamp(p.progressDist - entryDistance, 0, 8);
+      pit.entryProgress = p.progressDist - pit.routeProgress;
+      showRaceMessage('PIT IN', 'SLOW DOWN · BOX 07', 2200);
+    }
+  }
+  if (pit.phase === 'servicing') {
+    const box = race.world.playerPitBox;
+    p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
+    p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
+    p.throttle = 0; p.brake = 1; p.steer = 0;
+    p.offroad = false; p.offTimer = 0;
+    pit.serviceTimer -= dt;
+    if (pit.serviceTimer <= 0) {
+      pit.phase = 'driving-out';
+      showRaceMessage('PIT STOP COMPLETE', 'REJOIN THE CIRCUIT', 2200);
+      audio.tone(740, 0.14, 0.05, 'triangle');
+    }
+    return { active: true, locked: true };
+  }
+  if (pit.phase !== 'driving-in' && pit.phase !== 'driving-out') return { active: false, locked: false };
+
+  const remainingToBox = boxDistance - pit.routeProgress;
+  const remainingToExit = routeLength - pit.routeProgress;
+  const targetSpeed = pit.phase === 'driving-in'
+    ? Math.min(26, Math.sqrt(Math.max(0, remainingToBox) * 10))
+    : Math.min(26, 10 + Math.sqrt(Math.max(0, remainingToExit) * 5));
+  const speed = Math.max(0, p.vLong);
+  const look = pitRoutePoint(pit.routeProgress + clamp(8 + speed * 0.32, 9, 18));
+  const heading = Math.atan2(look.x - p.pos.x, look.z - p.pos.z);
+  const headingError = Math.atan2(Math.sin(heading - p.yaw), Math.cos(heading - p.yaw));
+  const steer = clamp(headingError * 1.9, -1, 1);
+  pit.steerDemand = steer;
+  pit.targetSpeed = targetSpeed;
+  pit.throttleDemand = clamp((targetSpeed - speed) * 0.18, 0, 0.82);
+  pit.brakeDemand = speed > targetSpeed + 0.6 ? clamp((speed - targetSpeed - 0.6) * 0.22, 0.12, 1) : 0;
+  return { active: true, locked: false };
+}
+
+function advancePitRoute(dt, p) {
+  const pit = race.pit;
+  const routeLength = (race.world.pitRoute.length - 1) * 5;
+  const boxDistance = 190;
+  const routeLimit = pit.phase === 'driving-in' ? boxDistance : routeLength;
+  const previousProgress = p.progressDist;
+  pit.routeProgress = Math.min(routeLimit, pit.routeProgress + Math.max(0, p.vLong) * dt);
+  p.progressDist = pit.entryProgress + pit.routeProgress;
+  p.sNorm = (((p.progressDist % race.track.length) + race.track.length) % race.track.length) / race.track.length;
+
+  // The pit lane crosses the timing line, so count that lap as the car passes
+  // the start/finish point even though normal track checkpoints are paused.
+  const lapBoundary = (p.lapsCompleted + 1) * race.track.length;
+  if (previousProgress < lapBoundary && p.progressDist >= lapBoundary) {
+    p.cpArmed = false;
+    p.cpNext = 1;
+    completeLap();
+  }
+
+  if (pit.phase === 'driving-in' && pit.routeProgress >= boxDistance - 1.5 && Math.abs(p.vLong) <= 1.5) {
+    const box = race.world.playerPitBox;
+    pit.routeProgress = boxDistance;
+    p.pos.x = box.x; p.pos.z = box.z; p.yaw = box.yaw;
+    p.vel.x = 0; p.vel.z = 0; p.vLong = 0; p.vLat = 0; p.yawRate = 0;
+    pit.phase = 'servicing';
+    pit.serviceTimer = 2.8;
+    showRaceMessage('PIT STOP', 'HOLD POSITION · SERVICE IN PROGRESS', 3000);
+    audio.tone(620, 0.12, 0.05, 'triangle');
+  } else if (pit.phase === 'driving-out' && pit.routeProgress >= routeLength - 1.5) {
+    pit.routeProgress = routeLength;
+    pit.phase = 'waiting';
+    p.progressDist = pit.entryProgress + routeLength;
+  }
+}
+
 function updatePlayerPhysics(dt) {
   const p = race.player;
   const tr = race.track;
   const controls = readControls();
-  const manualGas = controls.gas;
-  const manualBrake = controls.brake;
-  const handbrake = controls.handbrake;
+  const pitDrive = updatePitPhysics(dt, p);
+  if (pitDrive.locked) {
+    p.assistState = 'pit-stop';
+    p.prevVLong = 0;
+    return;
+  }
+  const manualGas = pitDrive.active ? false : controls.gas;
+  const manualBrake = pitDrive.active ? false : controls.brake;
+  const handbrake = pitDrive.active ? false : controls.handbrake;
 
-  let throttleDemand = 0;
-  let brakeDemand = 0;
-  let assistState = 'auto';
+  let throttleDemand = pitDrive.active ? race.pit.throttleDemand : 0;
+  let brakeDemand = pitDrive.active ? race.pit.brakeDemand : 0;
+  let assistState = pitDrive.active ? 'pit-limiter' : 'auto';
 
-  if (controls.active) {
+  if (controls.active && !pitDrive.active) {
     if (manualBrake) {
       // Player brake always wins — it is stronger than the auto brake.
       brakeDemand = 1;
@@ -1598,7 +1710,8 @@ function updatePlayerPhysics(dt) {
 
   p.throttle = damp(p.throttle, throttleDemand, 11, dt);
   p.brake = damp(p.brake, brakeDemand, 16, dt);
-  p.steer = damp(p.steer, controls.steer, HANDLING.steerResponse, dt);
+  const steerDemand = pitDrive.active ? race.pit.steerDemand : controls.steer;
+  p.steer = damp(p.steer, steerDemand, HANDLING.steerResponse, dt);
 
   const speed0 = Math.hypot(p.vel.x, p.vel.z);
   const f0x = Math.sin(p.yaw), f0z = Math.cos(p.yaw);
@@ -1668,6 +1781,7 @@ function updatePlayerPhysics(dt) {
   p.vel.z = fz * vLong + rz * vLat;
   p.pos.x += p.vel.x * dt;
   p.pos.z += p.vel.z * dt;
+  if (pitDrive.active) advancePitRoute(dt, p);
 
   const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
   const sample = tr.samples[near.index];
@@ -1676,14 +1790,16 @@ function updatePlayerPhysics(dt) {
   p.trackDist = near.dist;
   p.lateral = (p.pos.x - sample.x) * sample.nx + (p.pos.z - sample.z) * sample.nz;
   p.lastK = sample.k;
-  p.offroad = near.dist > tr.halfWidth + 1.15;
-  p.onKerb = !p.offroad && near.dist > tr.halfWidth - 0.55 && near.dist < tr.halfWidth + 1.6;
-  if (p.offroad) {
+  p.offroad = pitDrive.active ? false : near.dist > tr.halfWidth + 1.15;
+  p.onKerb = !pitDrive.active && !p.offroad && near.dist > tr.halfWidth - 0.55 && near.dist < tr.halfWidth + 1.6;
+  if (pitDrive.active) {
+    p.offTimer = 0;
+  } else if (p.offroad) {
     p.offTimer += dt * (near.dist > tr.halfWidth + 25 ? 2 : 1);
   } else {
     p.offTimer = Math.max(0, p.offTimer - dt * 2.5);
   }
-  if (race.state === 'racing' && p.offTimer > 2.7) recoverPlayer();
+  if (!pitDrive.active && race.state === 'racing' && p.offTimer > 2.7) recoverPlayer();
 
   const kmh = Math.abs(vLong) * 3.6;
   if (race.state === 'racing') p.topSpeed = Math.max(p.topSpeed, kmh);
@@ -1818,6 +1934,10 @@ function completeLap() {
   p.sectors = [false, false, false];
   if (p.lapsCompleted >= race.totalLaps) {
     finishRace();
+  } else if (p.lapsCompleted === race.pit.callAfterLaps && race.pit.phase === 'waiting') {
+    race.pit.phase = 'called';
+    showRaceMessage('PIT THIS LAP', 'BOX 07 · FOLLOW THE PIT LANE', 3200, true);
+    audio.tone(520, 0.16, 0.05, 'triangle');
   } else if (p.lapsCompleted === race.totalLaps - 1) {
     showRaceMessage('FINAL LAP', 'EVERYTHING YOU HAVE', 2300, true);
     audio.tone(880, 0.18, 0.06, 'triangle');
@@ -1830,6 +1950,10 @@ function completeLap() {
 function updatePlayerProgress(dt) {
   const p = race.player;
   if (p.finished) return;
+  if (race.pit.phase === 'driving-in' || race.pit.phase === 'servicing' || race.pit.phase === 'driving-out') {
+    p.sNorm = (((p.progressDist % race.track.length) + race.track.length) % race.track.length) / race.track.length;
+    return;
+  }
   const tr = race.track;
   const L = tr.length;
   const near = nearestTrackSample(tr, p.pos.x, p.pos.z, p.lastIndex);
@@ -1909,6 +2033,7 @@ function resolveCarCollisions(dt = 1 / 60) {
   const p = race.player;
   const tr = race.track;
   if (contactCooldown > 0) contactCooldown = Math.max(0, contactCooldown - dt);
+  if (race.pit.phase === 'driving-in' || race.pit.phase === 'servicing' || race.pit.phase === 'driving-out') return;
 
   fillCarCircles(p.pos.x, p.pos.z, p.yaw, playerCircles);
 
@@ -2319,6 +2444,14 @@ function updateHUD(dt) {
   dom.hudAssist.classList.toggle('is-braking', assist === 'auto-brake');
   dom.hudDrs.classList.toggle('is-active', p.drs);
   dom.hudDrs.textContent = p.drs ? 'DRS OPEN' : 'DRS READY';
+  const pitStatus = {
+    called: 'PIT THIS LAP',
+    'driving-in': 'PIT IN · BOX 07',
+    servicing: 'BOX 07 · SERVICE',
+    'driving-out': 'PIT EXIT'
+  }[race.pit.phase] || '';
+  dom.hudPit.textContent = pitStatus;
+  dom.hudPit.classList.toggle('is-visible', Boolean(pitStatus));
   dom.offTrack.classList.toggle('show', race.state === 'racing' && p.offroad && Math.abs(p.vLong) > 2.5);
 
   race.leaderTimer -= dt;
@@ -2766,6 +2899,7 @@ window.addEventListener('keydown', (e) => {
     toast(names[race.cameraMode]);
     audio.click(520);
   } else if (e.code === 'KeyR' && appState === 'race' && race && race.state === 'racing') {
+    if (race.pit.phase === 'driving-in' || race.pit.phase === 'servicing' || race.pit.phase === 'driving-out') return;
     recoverPlayer(false);
     toast('Reset to the racing line');
   }
