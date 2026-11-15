@@ -24,9 +24,11 @@ export function modelCandidates(selected, live = null, chain = defaultModelChain
 export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false, forceSharedTest = false, route = 'none', adminChain = null, modelList = null }) {
   if (requireShared) {
     if (!fusionEnabled) throw new Error('Required shared Fusion plugin unavailable; refusing free-model fallback')
-    // Preserve an explicit connected paid-provider choice outside admin test mode.
-    if (selected && selected !== fusionModel && !freeEgressModel(selected) && !forceSharedTest) return { model: selected, models: [selected, fusionModel] }
-    return { model: fusionModel, models: [fusionModel] }
+    // Only the admin forced-shared test is Fusion-only. A shared checkout merely supplies the
+    // shared credential; the saved model list keeps its order so a 401/503 can fall back.
+    if (forceSharedTest) return { model: fusionModel, models: [fusionModel] }
+    // Preserve an explicit connected paid-provider choice.
+    if (selected && selected !== fusionModel && !freeEgressModel(selected)) return { model: selected, models: [selected, fusionModel] }
   }
   if (Array.isArray(modelList) && modelList.length) {
     const steps = modelList.filter(row => row && typeof row.model === 'string').map(row => ({ id: String(row.id || row.model), model: row.model, route: ['direct', 'warp', 'backup', 'api'].includes(row.route) ? row.route : 'direct' }))
@@ -195,8 +197,8 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const requiredShared = env.FUSION_REQUIRE_SHARED === 'true'
   if (requiredShared && env.FUSION_ROUTE !== 'shared') throw new Error('Required shared Fusion route unavailable')
-  const strictFusion = requiredShared && (env.FUSION_FORCE_SHARED_TEST === 'true' || !selected || selected === fusionModel || freeEgressModel(selected)) || env.FUSION_ROUTE === 'own' && selected === fusionModel
-  const candidates = strictFusion ? [fusionModel] : models.filter(model => !requiredShared || !freeEgressModel(model))
+  const strictFusion = env.FUSION_FORCE_SHARED_TEST === 'true' || env.FUSION_ROUTE === 'own' && selected === fusionModel
+  const candidates = strictFusion ? [fusionModel] : models
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
   // The saved model list already carries order and route; do not reorder or append.
   const queue = candidates
