@@ -1103,8 +1103,7 @@ export function createRaceWorld(track, options = {}) {
     }
 
     // A lit team strip across the rear of the bay. The four tyre changers wait
-    // at the corners of the team's own pit box, not inside the garage, and are
-    // animated out to their wheels when the car is almost home.
+    // inside the garage with a fresh tyre each, then deploy when their car is near.
     const bayStrip = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.14, 0.1), teamMat);
     bayStrip.position.set(0, 5.62, 4.02);
     g.add(bayStrip);
