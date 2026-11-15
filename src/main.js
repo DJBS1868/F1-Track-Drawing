@@ -285,10 +285,20 @@ function ensurePitWheelBase(w) {
     z: w.pitBase.z + (w.z > 0 ? PIT_WHEEL_REST_ALONG : -PIT_WHEEL_REST_ALONG)
   };
   w.pitBlend = 0;
+  // A second wheel object holds the fresh tyre. It stays hidden at the hub
+  // until the old tyre has been taken off, then slides onto the corner while
+  // the removed tyre stays lying on the ground beside the car.
+  if (!w.pitFresh && w.steer.parent) {
+    const fresh = w.steer.clone(true);
+    fresh.position.set(w.pitBase.x, w.pitBase.y, w.pitBase.z);
+    fresh.rotation.set(0, 0, 0);
+    fresh.visible = false;
+    w.steer.parent.add(fresh);
+    w.pitFresh = { group: fresh, blend: 0 };
+  }
 }
 
-function resetPitWheelVisuals() {
-  const car = race?.playerCar;
+function resetPitWheelVisuals(car = race?.playerCar) {
   if (!car) return;
   for (const w of car.wheels) {
     ensurePitWheelBase(w);
@@ -296,20 +306,29 @@ function resetPitWheelVisuals() {
     w.steer.position.set(w.pitBase.x, w.pitBase.y, w.pitBase.z);
     w.steer.rotation.z = 0;
     w.steer.visible = true;
+    if (w.pitFresh) {
+      w.pitFresh.blend = 0;
+      w.pitFresh.group.visible = false;
+      w.pitFresh.group.position.set(w.pitBase.x, w.pitBase.y, w.pitBase.z);
+      w.pitFresh.group.rotation.set(0, 0, 0);
+    }
   }
 }
 
-function updatePitWheelVisuals(dt) {
-  const car = race?.playerCar;
-  if (!car) return;
-  const wheels = race.pit?.wheels || freshPitWheels();
+// Animate one car's four corners from the given per-wheel states:
+// 'old' = still on the car, 'removed' = old tyre lying on the ground,
+// 'new' = fresh tyre fitted on the hub. Reused by the player and every AI stop.
+function applyPitWheelVisual(car, wheelStates, dt) {
   for (const key of PIT_WHEELS) {
     const w = car.wheels[PIT_WHEEL_INDEX[key]];
     if (!w) continue;
     ensurePitWheelBase(w);
-    const target = wheels[key] === 'removed' ? 1 : 0;
-    w.pitBlend = damp(w.pitBlend, target, 10, dt);
-    if (Math.abs(w.pitBlend - target) < 0.005) w.pitBlend = target;
+    const state = wheelStates?.[key] || 'old';
+    // Both the stripped and freshly fitted corner leave the old tyre on the
+    // ground; only the fresh clone appears on the hub.
+    const oldTarget = state === 'old' ? 0 : 1;
+    w.pitBlend = damp(w.pitBlend, oldTarget, 10, dt);
+    if (Math.abs(w.pitBlend - oldTarget) < 0.005) w.pitBlend = oldTarget;
     const t = smoothstep(0, 1, w.pitBlend);
     w.steer.position.x = lerp(w.pitBase.x, w.pitRest.x, t);
     w.steer.position.y = lerp(w.pitBase.y, w.pitRest.y, t);
@@ -318,7 +337,38 @@ function updatePitWheelVisuals(dt) {
     if (t > 0.001 && t < 0.999) {
       w.spin.rotation.x += dt * (3.2 + t * 8) * w.pitOut;
     }
+
+    const fresh = w.pitFresh;
+    if (!fresh) continue;
+    const freshTarget = state === 'new' ? 1 : 0;
+    fresh.blend = damp(fresh.blend, freshTarget, 11, dt);
+    if (Math.abs(fresh.blend - freshTarget) < 0.005) fresh.blend = freshTarget;
+    const f = smoothstep(0, 1, fresh.blend);
+    fresh.group.visible = f > 0.002;
+    if (!fresh.group.visible) continue;
+    // The fresh tyre swings in from just outside the hub and settles onto the
+    // axle, staying upright once fitted.
+    fresh.group.position.set(
+      lerp(w.pitBase.x + w.pitOut * 1.15, w.pitBase.x, f),
+      lerp(w.pitBase.y + 0.6, w.pitBase.y, f),
+      w.pitBase.z
+    );
+    fresh.group.rotation.z = w.pitOut * (Math.PI / 2) * (1 - f);
   }
+}
+
+function updatePitWheelVisuals(dt) {
+  const car = race?.playerCar;
+  if (!car) return;
+  if (race.pit?.phase !== 'servicing') {
+    // Cleared to leave: swap back to the car's own wheels in the same frame the
+    // fresh clones disappear, so the release is invisible from the outside.
+    if (car.wheels.some((w) => w.pitFresh?.group.visible || w.pitBlend > 0)) {
+      resetPitWheelVisuals(car);
+    }
+    return;
+  }
+  applyPitWheelVisual(car, race.pit?.wheels || freshPitWheels(), dt);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1480,6 +1530,10 @@ function resetRaceState() {
   r.world.setStartLights(0);
   r.world.resetPitCrew(r.world.playerPitBox);
   resetPitWheelVisuals();
+  r.ai.forEach((a) => {
+    resetPitWheelVisuals(a.model);
+    if (a.pitBox) r.world.resetPitCrew(a.pitBox);
+  });
   r.smoke.reset();
   audio.setPaused(false);
 
@@ -1816,17 +1870,34 @@ function pitMetrics() {
   };
 }
 
-// The crew waits at the corners of the player's box. Once the car is inside the
-// final approach they step in to one tyre each, and stay there while the stop is
-// serviced before walking back as the car rejoins the lane.
+// Every crew waits inside its own garage. Once its car is close enough their
+// four changers walk out to one wheel each, hold the fresh tyre while the stop
+// is serviced, then walk back as the car rejoins the lane.
 function updatePitCrewVisual(dt) {
-  const box = race.world?.playerPitBox;
-  if (!box || !race.world.updatePitCrew) return;
+  const world = race.world;
+  if (!world?.updatePitCrew) return;
   const pit = race.pit;
   const { boxDistance } = pitMetrics();
-  const deployed = pit.phase === 'servicing'
+  const playerWorking = pit.phase === 'servicing';
+  const playerDeployed = playerWorking
     || (pit.phase === 'driving-in' && boxDistance - pit.routeProgress <= PIT_CREW_DEPLOY_DISTANCE);
-  race.world.updatePitCrew(dt, box, deployed, pit.phase === 'servicing');
+  world.updatePitCrew(
+    dt, world.playerPitBox, playerDeployed, playerWorking,
+    playerWorking ? pit.wheels : null
+  );
+
+  for (const a of race.ai) {
+    if (!a.pitBox) continue;
+    const aiPit = a.pit;
+    const working = aiPit.phase === 'service';
+    const deployed = working
+      || (aiPit.phase === 'in'
+        && a.pitBox.routeProgress - aiPit.routeProgress <= PIT_CREW_DEPLOY_DISTANCE);
+    world.updatePitCrew(
+      dt, a.pitBox, deployed, working,
+      working ? aiPitWheelStates(a) : null
+    );
+  }
 }
 
 const PIT_LIMITER_SPEED = 24;
@@ -2676,6 +2747,32 @@ function aiPitFollowSpeed(a, target) {
   return Math.min(target, follow);
 }
 
+// Spread the AI stop across its service window: strip each corner in turn,
+// then fit the fresh set in the same order. The states feed both the wheel
+// visuals and the crew's carried tyres.
+function aiPitWheelStates(a) {
+  const pit = a.pit;
+  const duration = Math.max(0.1, pit.serviceDuration || 3);
+  const elapsed = clamp(duration - pit.serviceTimer, 0, duration);
+  const states = {};
+  PIT_WHEELS.forEach((key, i) => {
+    const removeAt = (0.08 + i * 0.11) * duration;
+    const fitAt = (0.52 + i * 0.11) * duration;
+    states[key] = elapsed >= fitAt ? 'new' : elapsed >= removeAt ? 'removed' : 'old';
+  });
+  return states;
+}
+
+function updateAiPitWheelVisuals(a, dt) {
+  if (a.pit.phase === 'service') {
+    applyPitWheelVisual(a.model, aiPitWheelStates(a), dt);
+  } else if (a.pit.phase === 'in') {
+    // Rolling into the box: make sure every corner has its fresh clone ready
+    // but keep the wheels on the car.
+    for (const w of a.model.wheels) ensurePitWheelBase(w);
+  }
+}
+
 function enterAiPit(a) {
   const pit = a.pit;
   const over = Math.max(0, a.dist - pit.entryDist);
@@ -2715,6 +2812,7 @@ function updateAiPit(dt, a) {
       pit.phase = 'out';
       pit.stops++;
       a.tyreStops = (a.tyreStops || 0) + 1;
+      resetPitWheelVisuals(a.model);
     }
   } else if (pit.phase === 'out') {
     const remaining = Math.max(0, routeLength - pit.routeProgress);
@@ -2923,6 +3021,7 @@ function updateAI(dt) {
   for (const a of ai) {
     if (isAiInPitLane(a)) {
       const pit = a.pit;
+      updateAiPitWheelVisuals(a, dt);
       a.model.root.position.set(pit.x, 0, pit.z);
       a.model.root.rotation.y = pit.yaw;
       a.model.body.rotation.z = damp(a.model.body.rotation.z, 0, 6, dt);

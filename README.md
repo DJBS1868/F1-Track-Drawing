@@ -31,7 +31,7 @@ The car drives its own throttle and brakes; you focus on the racing line unless 
 - Procedural 3D world, kerbs, scenery, start gantry, and dynamic lighting.
 - A painted staggered start box around every car, with the whole field launching from its marked slot.
 - One to ten laps, zero to nine AI racers, three rival difficulty levels.
-- Randomised team-radio pit calls, a working pit lane, a broadcast-style overhead pit-box camera, and a per-corner tyre minigame: your crew waits at the box, walks to one tyre each as you arrive, and every unscrewed wheel visibly comes off the car before it is screwed back on. Tyre wear resets on fresh rubber. When a stop is required, the whole AI field boxes on the same lap as the player and queues through the shared pit lane.
+- Randomised team-radio pit calls, a working pit lane, a broadcast-style overhead pit-box camera, and a per-corner tyre minigame: every team's four-person crew waits inside its garage holding a fresh tyre, walks out to one wheel each as the car arrives, and every unscrewed wheel visibly comes off the car and is left on the ground before a fresh tyre is screwed back on. The same animated stop plays out at every AI pit box. Tyre wear resets on fresh rubber. When a stop is required, the whole AI field boxes on the same lap as the player and queues through the shared pit lane.
 - Livery studio with per-part paint, presets, colour wheel, hex input, and stickers.
 - Chase and onboard cameras, live standings, sector map, DRS, lap timing, and a full classification screen.
 - Responsive desktop, phone, tablet, and landscape layouts with on-screen touch controls.

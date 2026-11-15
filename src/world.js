@@ -1108,12 +1108,16 @@ export function createRaceWorld(track, options = {}) {
     bayStrip.position.set(0, 5.62, 4.02);
     g.add(bayStrip);
 
+    // The pit box sits out on the apron, in front of the garage. In the
+    // garage's local frame the box is at crewBoxZ, so the idle spots must stay
+    // on the workshop floor (local z -4.05 .. 4.45) while the working spots
+    // step out to the car's four corners.
     const crewBoxZ = PIT_BOX_LATERAL - GARAGE_LATERAL;
     const crewDefs = [
-      { wheel: 'fl', x: -4.5, z: crewBoxZ - 1.65, tx: -1.63, tz: crewBoxZ - 0.86 - 0.75, yaw: 0 },
-      { wheel: 'fr', x: -4.5, z: crewBoxZ + 1.65, tx: -1.63, tz: crewBoxZ + 0.86 + 0.75, yaw: Math.PI },
-      { wheel: 'rl', x: 4.5, z: crewBoxZ - 1.65, tx: 1.56, tz: crewBoxZ - 0.84 - 0.75, yaw: 0 },
-      { wheel: 'rr', x: 4.5, z: crewBoxZ + 1.65, tx: 1.56, tz: crewBoxZ + 0.84 + 0.75, yaw: Math.PI }
+      { wheel: 'fl', ix: -3.35, iz: -1.9, tx: -1.63, tz: crewBoxZ - 0.86 - 0.75, yaw: 0 },
+      { wheel: 'fr', ix: -3.35, iz: -0.3, tx: -1.63, tz: crewBoxZ + 0.86 + 0.75, yaw: Math.PI },
+      { wheel: 'rl', ix: 3.35, iz: -1.9, tx: 1.56, tz: crewBoxZ - 0.84 - 0.75, yaw: 0 },
+      { wheel: 'rr', ix: 3.35, iz: -0.3, tx: 1.56, tz: crewBoxZ + 0.84 + 0.75, yaw: Math.PI }
     ];
     for (let crewIndex = 0; crewIndex < crewDefs.length; crewIndex++) {
       const def = crewDefs[crewIndex];
@@ -1153,24 +1157,31 @@ export function createRaceWorld(track, options = {}) {
       head.position.set(0, 1.44, 0);
       const helmet = new THREE.Mesh(crewHelmetGeo, teamMat);
       helmet.position.set(0, 1.47, 0);
-      crew.add(legPivotA, legPivotB, torso, armPivotA, armPivotB, head, helmet);
+      // Each changer carries the fresh tyre for their own corner, held up in
+      // front of the chest until that wheel is actually fitted.
+      const carried = new THREE.Mesh(tyreGeo, tyreMat);
+      carried.position.set(0, 0.76, 0.33);
+      carried.rotation.x = Math.PI / 2;
+      carried.scale.setScalar(0.82);
+      crew.add(legPivotA, legPivotB, torso, armPivotA, armPivotB, head, helmet, carried);
       crew.traverse((child) => { if (child.isMesh) child.castShadow = true; });
-      crew.position.set(def.x, 0, def.z);
-      const idleYaw = Math.atan2(-def.x, crewBoxZ - def.z);
+      crew.position.set(def.ix, 0, def.iz);
+      const idleYaw = Math.atan2(def.tx - def.ix, def.tz - def.iz);
       crew.rotation.y = idleYaw;
       g.add(crew);
       box.crew.push({
         wheel: def.wheel,
         group: crew,
+        tyre: carried,
         legA: legPivotA,
         legB: legPivotB,
         armA: armPivotA,
         armB: armPivotB,
         torso,
-        idle: { x: def.x, z: def.z, yaw: idleYaw },
+        idle: { x: def.ix, z: def.iz, yaw: idleYaw },
         target: { x: def.tx, z: def.tz, yaw: def.yaw },
-        x: def.x,
-        z: def.z,
+        x: def.ix,
+        z: def.iz,
         walk: Math.random() * TAU,
         idleT: Math.random() * TAU,
         speed: 4.4 + Math.random() * 0.6
@@ -1455,13 +1466,16 @@ export function createRaceWorld(track, options = {}) {
         mat.emissiveIntensity = i < count ? 4.5 : 0.05;
       });
     },
-    // Walk the chosen box's crew between their waiting spots at the box corners
-    // and one tyre each. They are only animated for the player's stop; every
-    // other garage crew still waits at its own box.
-    updatePitCrew(dt, box = playerPitBox, deployed = false, working = false) {
+    // Walk the chosen box's crew between their waiting spots inside the garage
+    // and one tyre each at the box. Every team's crew can be driven this way, so
+    // AI stops get the same treatment as the player's.
+    updatePitCrew(dt, box = playerPitBox, deployed = false, working = false, fitted = null) {
       if (!box?.crew) return;
       const stepTime = Math.max(0, dt);
       for (const actor of box.crew) {
+        // The fresh tyre stays in the changer's hands until that corner has
+        // actually been fitted, then it is no longer carried.
+        if (actor.tyre) actor.tyre.visible = fitted?.[actor.wheel] !== 'new';
         const goal = deployed ? actor.target : actor.idle;
         const dx = goal.x - actor.x;
         const dz = goal.z - actor.z;
@@ -1507,6 +1521,7 @@ export function createRaceWorld(track, options = {}) {
         actor.idleT = Math.random() * TAU;
         actor.group.position.set(actor.x, 0, actor.z);
         actor.group.rotation.y = actor.idle.yaw;
+        if (actor.tyre) actor.tyre.visible = true;
         actor.legA.rotation.x = 0;
         actor.legB.rotation.x = 0;
         actor.armA.rotation.x = 0;
