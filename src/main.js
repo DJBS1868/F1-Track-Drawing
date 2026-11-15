@@ -19,7 +19,7 @@ const dom = {
   loading: $('loading'), toast: $('toast'),
   btnStart: $('btn-start'), btnLastTrack: $('btn-last-track'), lastTrackLabel: $('last-track-label'),
   btnGarage: $('btn-garage'), btnGarageExit: $('btn-garage-exit'),
-  setupLaps: $('setup-laps'), setupAI: $('setup-ai'),
+  setupLaps: $('setup-laps'), setupAI: $('setup-ai'), setupScenery: $('setup-scenery'),
   menuCard: $('menu-card'), menuCardChip: $('menu-card-chip'), menuMinimap: $('menu-minimap'),
   menuStatLength: $('menu-stat-length'), menuStatTurns: $('menu-stat-turns'),
   menuStatBest: $('menu-stat-best'), menuCardFoot: $('menu-card-foot'),
@@ -206,24 +206,30 @@ let playerPaint = playerLivery.body;
 let selectedGaragePart = 'body';
 let selectedStickerSlot = 'nose';
 
-const RACE_SETUP_DEFAULTS = { laps: 3, ai: 3 };
+const RACE_SETUP_DEFAULTS = { laps: 3, ai: 3, scenery: 'nature' };
 try {
   const savedLaps = localStorage.getItem('apexink.laps');
   const savedAI = localStorage.getItem('apexink.ai');
+  const savedScenery = localStorage.getItem('apexink.scenery');
   if (savedLaps !== null && Number.isInteger(Number(savedLaps)) && Number(savedLaps) >= 1 && Number(savedLaps) <= 10) {
     dom.setupLaps.value = savedLaps;
   }
   if (savedAI !== null && Number.isInteger(Number(savedAI)) && Number(savedAI) >= 0 && Number(savedAI) <= 9) {
     dom.setupAI.value = savedAI;
   }
+  if (savedScenery === 'nature' || savedScenery === 'city') {
+    dom.setupScenery.value = savedScenery;
+  }
 } catch {}
 
 function getRaceSetup() {
   const laps = Number(dom.setupLaps.value);
   const ai = Number(dom.setupAI.value);
+  const scenery = dom.setupScenery.value;
   return {
     totalLaps: Number.isInteger(laps) ? clamp(laps, 1, 10) : RACE_SETUP_DEFAULTS.laps,
-    aiCount: Number.isInteger(ai) ? clamp(ai, 0, 9) : RACE_SETUP_DEFAULTS.ai
+    aiCount: Number.isInteger(ai) ? clamp(ai, 0, 9) : RACE_SETUP_DEFAULTS.ai,
+    scenery: scenery === 'city' ? 'city' : RACE_SETUP_DEFAULTS.scenery
   };
 }
 
@@ -1230,6 +1236,7 @@ function enterRace(trackData) {
   const setup = getRaceSetup();
   const world = createRaceWorld(trackData, {
     playerColor: hexToInt(playerLivery.body),
+    scenery: setup.scenery,
     aiTeams: AI_TEAMS.map((team) => ({ name: team.name, number: team.number, paint: team.paint }))
   });
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
@@ -3914,6 +3921,9 @@ function wireEvents() {
   });
   dom.setupAI.addEventListener('change', () => {
     try { localStorage.setItem('apexink.ai', dom.setupAI.value); } catch {}
+  });
+  dom.setupScenery.addEventListener('change', () => {
+    try { localStorage.setItem('apexink.scenery', dom.setupScenery.value); } catch {}
   });
   dom.btnStart.addEventListener('click', startDrawing);
   dom.btnGarage.addEventListener('click', enterGarage);
