@@ -50,8 +50,10 @@ export function resolveRunModels({ selected, live = null, fusionEnabled = false,
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false
   const type = String(error.type || ''), message = String(error.message || '')
-  return [429, 500, 502, 503, 504].includes(Number(error.status)) || ['provider.free-limit', 'provider.rate-limit', 'provider.overloaded', 'provider.model-not-found'].includes(type) ||
-    /FreeUsageLimit|ModelDeprecated|model.*(?:not found|unavailable|deprecated)|free usage limit|rate.limit/i.test(message) ||
+  // 402 is the provider billing wall ("Insufficient Balance"): that row cannot answer, so the
+  // chain moves on instead of stopping before the Fusion rows.
+  return [402, 429, 500, 502, 503, 504].includes(Number(error.status)) || ['provider.free-limit', 'provider.rate-limit', 'provider.quota', 'provider.overloaded', 'provider.model-not-found'].includes(type) ||
+    /FreeUsageLimit|ModelDeprecated|model.*(?:not found|unavailable|deprecated)|free usage limit|rate.limit|insufficient[_ ]balance|insufficient (?:quota|credits?|funds)|quota exceeded|payment required|billing/i.test(message) ||
     // A dropped upstream stream is worth another model, not a failed build.
     /upstream connection lost|connection (?:lost|reset|closed)|ECONNRESET|fetch failed|socket hang up|terminated/i.test(message)
 }
@@ -65,6 +67,7 @@ export function attemptErrorClass(error) {
   const status = Number(error.status), type = String(error.type || ''), message = String(error.message || '')
   if (proxyTunnelError(error)) return 'proxy'
   if (type === 'provider.free-limit' || /FreeUsageLimit|free usage limit/i.test(message)) return 'free-limit'
+  if (status === 402 || type === 'provider.quota' || /insufficient[_ ]balance|insufficient (?:quota|credits?|funds)|quota exceeded|payment required|billing/i.test(message)) return 'quota'
   if (status === 429 || type === 'provider.rate-limit' || /rate.limit|\b429\b/i.test(message)) return 'rate-limit'
   if ([401, 403].includes(status) || /^provider\.auth|unauthori[sz]ed|forbidden|invalid api key/i.test(type + ' ' + message)) return 'auth'
   return 'other'
@@ -205,6 +208,9 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
   const routeList = Array.isArray(routes) ? routes : queue.map(() => 'direct')
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
+  // A spent free-model quota belongs to one egress: later rows with the same model and route
+  // are pointless, while the same model behind WARP is a different egress and still gets a turn.
+  const spentEgress = new Set()
   let fusionSwitched = false, dropped = false
   const stop = signal => { interrupted = true; child?.kill(signal) }
   const onTerm = () => stop('SIGTERM'), onInt = () => stop('SIGINT')
@@ -213,6 +219,11 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
     for (let index = 0; index < queue.length; index++) {
       const model = queue[index]
       if (interrupted) break
+      const egress = `${model}|${routeList[index]}`
+      if (spentEgress.has(egress)) {
+        appendFileSync(logFile, `[model-fallback] Skipping ${model} on ${routeList[index]}: free quota already spent for this egress.\n`)
+        continue
+      }
       if (lazyProxy && routeList[index] === 'warp') {
         const setup = lazyProxy; lazyProxy = null
         appendFileSync(logFile, '[model-fallback] Reached a WARP model row; setting up the WARP proxy now.\n')
@@ -257,6 +268,8 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
       else if (outcome === 'failed' || outcome === 'interrupted' || code === 0 && (failure || api)) code = 1
       const retryable = outcome !== 'interrupted' && (retryableProviderError(failure) || fusionFallbackError(model, failure))
       attempts.push({ model, cli_code: cliCode, outcome: outcome || 'unverified', code, retryable, error_class: code === 0 ? null : attemptErrorClass(failure) || (outcome === 'interrupted' ? null : 'other'), duration_ms: Date.now() - started })
+      // Free-model quota is per egress block; Fusion is a separate credential and keeps its rows.
+      if (code !== 0 && !interrupted && model !== fusionModel && attemptErrorClass(failure) === 'free-limit') spentEgress.add(egress)
       writeFileSync(join(directory, 'model-attempts.json'), JSON.stringify(attempts))
       await reportSessionStats({ api, sessionID, directory, env, attempts })
       await pingHeartbeat(env)
