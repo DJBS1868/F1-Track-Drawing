@@ -712,6 +712,26 @@ export function createRaceWorld(track, options = {}) {
   ground.receiveShadow = true;
   scene.add(ground);
 
+  if (isCity) {
+    const infieldShape = new THREE.Shape();
+    const infieldStride = Math.max(1, Math.floor(track.N / 420));
+    for (let i = 0; i < track.N; i += infieldStride) {
+      const sample = track.samples[i];
+      if (i === 0) infieldShape.moveTo(sample.x, -sample.z);
+      else infieldShape.lineTo(sample.x, -sample.z);
+    }
+    infieldShape.closePath();
+    const infieldTex = grassTexture();
+    disposables.push(infieldTex);
+    const infield = new THREE.Mesh(new THREE.ShapeGeometry(infieldShape), new THREE.MeshStandardMaterial({
+      map: infieldTex, color: 0xb7b79a, roughness: 1
+    }));
+    infield.rotation.x = -Math.PI / 2;
+    infield.position.y = -0.018;
+    infield.receiveShadow = true;
+    scene.add(infield);
+  }
+
   /* road */
   const asphaltTex = asphaltTexture();
   disposables.push(asphaltTex);
@@ -822,6 +842,29 @@ export function createRaceWorld(track, options = {}) {
   const worldExtent = Math.max(track.bbox.width, track.bbox.depth) * 0.5 + 300;
   const roadPts = [];
   for (let i = 0; i < track.N; i += 2) roadPts.push(track.samples[i]);
+  const circuitPolygon = [];
+  const polygonStride = Math.max(1, Math.floor(track.N / 360));
+  for (let i = 0; i < track.N; i += polygonStride) {
+    const sample = track.samples[i];
+    circuitPolygon.push({ x: sample.x, z: sample.z });
+  }
+  let circuitArea = 0;
+  for (let i = 0; i < circuitPolygon.length; i++) {
+    const a = circuitPolygon[i];
+    const b = circuitPolygon[(i + 1) % circuitPolygon.length];
+    circuitArea += a.x * b.z - b.x * a.z;
+  }
+  const outwardSide = circuitArea >= 0 ? 1 : -1;
+  function insideCircuit(x, z) {
+    let inside = false;
+    for (let i = 0, j = circuitPolygon.length - 1; i < circuitPolygon.length; j = i++) {
+      const a = circuitPolygon[i];
+      const b = circuitPolygon[j];
+      if ((a.z > z) !== (b.z > z)
+        && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+    }
+    return inside;
+  }
 
   // Nearest point on the racing surface. Besides distance, this reports which
   // side of the road the point lies on and which part of the lap it is beside.
@@ -930,6 +973,8 @@ export function createRaceWorld(track, options = {}) {
       const rad = Math.sqrt(rng()) * worldExtent;
       const x = track.centerX + Math.cos(ang) * rad;
       const z = track.centerZ + Math.sin(ang) * rad;
+      const isInside = insideCircuit(x, z);
+      if (isCity && (opts.outside ? isInside : !isInside)) continue;
       const info = nearestRoad(x, z);
       if (info.dist < minRoad) continue;
       if (nearStart(x, z, opts.nearStartPad ?? 90)) continue;
@@ -949,6 +994,7 @@ export function createRaceWorld(track, options = {}) {
       const off = minOffset + rng() * Math.max(0.1, maxOffset - minOffset);
       const x = s.x + s.nx * side * off;
       const z = s.z + s.nz * side * off;
+      if (isCity && !insideCircuit(x, z)) continue;
       const info = nearestRoad(x, z);
       if (info.dist < minOffset - 2.5) continue;
       if (nearStand(x, z, 9)) continue;
@@ -958,7 +1004,6 @@ export function createRaceWorld(track, options = {}) {
   };
 
   const dummy = new THREE.Object3D();
-  if (!isCity) {
   /* ── vegetation ──────────────────────────────────────────────── */
   const broadleafData = [];
   const coniferData = [];
@@ -1008,6 +1053,7 @@ export function createRaceWorld(track, options = {}) {
     const off = 18 + rng() * 15;
     const x = s.x + s.nx * side * off;
     const z = s.z + s.nz * side * off;
+    if (isCity && !insideCircuit(x, z)) continue;
     if (nearestRoad(x, z).dist < 16) continue;
     if (nearStand(x, z, 10)) continue;
     if (rng() < 0.62) addBroadleaf(x, z, 0.9 + rng() * 0.35);
@@ -1043,6 +1089,7 @@ export function createRaceWorld(track, options = {}) {
       const off = 13.5 + rng() * 2.2;
       const x = s.x + s.nx * side * off;
       const z = s.z + s.nz * side * off;
+      if (isCity && !insideCircuit(x, z)) continue;
       if (nearestRoad(x, z).dist < 12) continue;
       if (nearStand(x, z, 9)) continue;
       addShrub(x, z, 0.9 + rng() * 0.5, 1.5 + rng() * 0.9);
@@ -1062,6 +1109,7 @@ export function createRaceWorld(track, options = {}) {
       const off = 13.5 + rng() * 4;
       const x = s.x + s.nx * side * off;
       const z = s.z + s.nz * side * off;
+      if (isCity && !insideCircuit(x, z)) continue;
       if (nearestRoad(x, z).dist < 11.8) continue;
       if (nearStand(x, z, 8)) continue;
       addShrub(x, z, 0.35 + rng() * 0.55, 1.1 + rng() * 0.6);
@@ -1097,6 +1145,7 @@ export function createRaceWorld(track, options = {}) {
     for (const lx of [-halfW - 7.4, halfW + 7.4]) {
       for (let lz = -frontZ - 2; lz <= frontZ + 5; lz += 3.3) {
         const w = toWorld(lx + (rng() - 0.5) * 1.2, lz);
+        if (isCity && !insideCircuit(w.x, w.z)) continue;
         if (nearestRoad(w.x, w.z).dist < 13) continue;
         addShrub(w.x, w.z, 0.62 + rng() * 0.38, 1.4 + rng() * 0.5);
       }
@@ -1105,6 +1154,7 @@ export function createRaceWorld(track, options = {}) {
       const color = flowerColors[(rng() * flowerColors.length) | 0];
       for (let k = 0; k < 9; k++) {
         const w = toWorld(lx + (rng() - 0.5) * 6, frontZ + 11.4 + (rng() - 0.5) * 3);
+        if (isCity && !insideCircuit(w.x, w.z)) continue;
         if (nearestRoad(w.x, w.z).dist < 12.5) continue;
         flowerData.push({
           x: w.x, z: w.z,
@@ -1133,21 +1183,23 @@ export function createRaceWorld(track, options = {}) {
   const forestRounds = [];
   const forestGreens = [0x2f4a2c, 0x355430, 0x2a4028, 0x3c5a33];
   const forestRadius = Math.max(320, Math.max(track.bbox.width, track.bbox.depth) * 0.72);
-  for (let i = 0; i < 620; i++) {
-    const ang = rng() * TAU;
-    const rad = forestRadius + Math.sqrt(rng()) * 460;
-    const x = track.centerX + Math.cos(ang) * rad;
-    const z = track.centerZ + Math.sin(ang) * rad;
-    if (nearestRoad(x, z).dist < 48) continue;
-    const scale = 3.4 + rng() * 5.6;
-    if (rng() < 0.7) {
-      forestCones.push({
-        x, z, scale,
-        h: scale * (2.2 + rng() * 0.9),
-        color: forestGreens[(rng() * forestGreens.length) | 0]
-      });
-    } else {
-      forestRounds.push({ x, z, scale, color: pickGreen() });
+  if (!isCity) {
+    for (let i = 0; i < 620; i++) {
+      const ang = rng() * TAU;
+      const rad = forestRadius + Math.sqrt(rng()) * 460;
+      const x = track.centerX + Math.cos(ang) * rad;
+      const z = track.centerZ + Math.sin(ang) * rad;
+      if (nearestRoad(x, z).dist < 48) continue;
+      const scale = 3.4 + rng() * 5.6;
+      if (rng() < 0.7) {
+        forestCones.push({
+          x, z, scale,
+          h: scale * (2.2 + rng() * 0.9),
+          color: forestGreens[(rng() * forestGreens.length) | 0]
+        });
+      } else {
+        forestRounds.push({ x, z, scale, color: pickGreen() });
+      }
     }
   }
 
@@ -1310,22 +1362,23 @@ export function createRaceWorld(track, options = {}) {
     scene.add(mesh);
   }
 
-  /* ── distant mountains ───────────────────────────────────────── */
-  const mountainGroup = new THREE.Group();
-  const mountainMat = new THREE.MeshStandardMaterial({ color: 0x6d8291, roughness: 1, flatShading: true });
-  const mountainMat2 = new THREE.MeshStandardMaterial({ color: 0x8799a4, roughness: 1, flatShading: true });
-  const mountainRadius = Math.max(850, Math.max(track.bbox.width, track.bbox.depth) + 520);
-  for (let i = 0; i < 20; i++) {
-    const ang = (i / 20) * TAU + rng() * 0.2;
-    const dist = mountainRadius * (0.85 + rng() * 0.5);
-    const h = 90 + rng() * 190;
-    const w = 120 + rng() * 260;
-    const m = new THREE.Mesh(new THREE.ConeGeometry(w, h, 5 + Math.floor(rng() * 3)), rng() > 0.5 ? mountainMat : mountainMat2);
-    m.position.set(track.centerX + Math.cos(ang) * dist, h * 0.42, track.centerZ + Math.sin(ang) * dist);
-    m.rotation.y = rng() * TAU;
-    mountainGroup.add(m);
-  }
-  scene.add(mountainGroup);
+  if (!isCity) {
+    /* ── distant mountains ───────────────────────────────────────── */
+    const mountainGroup = new THREE.Group();
+    const mountainMat = new THREE.MeshStandardMaterial({ color: 0x6d8291, roughness: 1, flatShading: true });
+    const mountainMat2 = new THREE.MeshStandardMaterial({ color: 0x8799a4, roughness: 1, flatShading: true });
+    const mountainRadius = Math.max(850, Math.max(track.bbox.width, track.bbox.depth) + 520);
+    for (let i = 0; i < 20; i++) {
+      const ang = (i / 20) * TAU + rng() * 0.2;
+      const dist = mountainRadius * (0.85 + rng() * 0.5);
+      const h = 90 + rng() * 190;
+      const w = 120 + rng() * 260;
+      const m = new THREE.Mesh(new THREE.ConeGeometry(w, h, 5 + Math.floor(rng() * 3)), rng() > 0.5 ? mountainMat : mountainMat2);
+      m.position.set(track.centerX + Math.cos(ang) * dist, h * 0.42, track.centerZ + Math.sin(ang) * dist);
+      m.rotation.y = rng() * TAU;
+      mountainGroup.add(m);
+    }
+    scene.add(mountainGroup);
   }
 
   if (isCity) {
@@ -1381,10 +1434,48 @@ export function createRaceWorld(track, options = {}) {
       scene.add(rails);
     }
 
+    // A continuous perimeter wall sits well behind the grandstands. Its height
+    // leaves the outer city skyline visible above it without crowding the track.
+    const wallSegments = [];
+    const wallOffset = track.halfWidth + 105;
+    const wallStep = Math.max(1, Math.round(9 / track.step));
+    for (let i = 0; i < track.N; i += wallStep) {
+      const next = (i + wallStep) % track.N;
+      const a = track.samples[i];
+      const b = track.samples[next];
+      const ax = a.x + a.nx * outwardSide * wallOffset;
+      const az = a.z + a.nz * outwardSide * wallOffset;
+      const bx = b.x + b.nx * outwardSide * wallOffset;
+      const bz = b.z + b.nz * outwardSide * wallOffset;
+      const length = Math.hypot(bx - ax, bz - az);
+      if (length < 0.1) continue;
+      wallSegments.push({
+        x: (ax + bx) * 0.5,
+        z: (az + bz) * 0.5,
+        length: length + 1.4,
+        yaw: -Math.atan2(bz - az, bx - ax)
+      });
+    }
+    const perimeterWall = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 8.5, 2.2),
+      new THREE.MeshStandardMaterial({ color: 0x777a78, roughness: 0.94 }),
+      wallSegments.length
+    );
+    wallSegments.forEach((wall, i) => {
+      dummy.position.set(wall.x, 4.25, wall.z);
+      dummy.rotation.set(0, wall.yaw, 0);
+      dummy.scale.set(wall.length, 1, 1);
+      dummy.updateMatrix();
+      perimeterWall.setMatrixAt(i, dummy.matrix);
+    });
+    perimeterWall.castShadow = true;
+    perimeterWall.receiveShadow = true;
+    scene.add(perimeterWall);
+
     const buildingPalette = [0x777b7d, 0x96928a, 0x60696d, 0xb0a99b, 0x747478, 0x8e9897, 0x5e626a];
     const buildings = [];
     for (let tries = 0; tries < 700 && buildings.length < 105; tries++) {
-      const p = spot(72, { nearStartPad: 145, standPad: 30 });
+      const p = spot(track.halfWidth + 125, { outside: true, nearStartPad: 145, standPad: 30 });
       if (!p) continue;
       const width = 13 + rng() * 22;
       const depth = 12 + rng() * 20;
