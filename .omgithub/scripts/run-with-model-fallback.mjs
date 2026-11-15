@@ -21,26 +21,29 @@ export function modelCandidates(selected, live = null, chain = defaultModelChain
   const rest = liveOnly.some(model => preferredFreeModels.includes(model)) ? liveOnly : ordered
   return [...new Set([selected, ...rest].filter(Boolean))]
 }
-// Admin force mode is an explicit test contract, not a normal user model preference.
-// Continuations copy model/* labels, so both label resolution and execution enforce it.
-// adminChain (ordered model ids from the site's admin settings) replaces the default order for Default builds.
-// Fusion keeps its leading slot when enabled; requireShared and route handling are unchanged.
-export function adminModelChain(adminChain, fusionEnabled = false) {
-  const free = Array.isArray(adminChain) ? adminChain.filter(id => typeof id === 'string' && id && id !== fusionModel) : []
-  return free.length ? [...(fusionEnabled ? [fusionModel] : []), ...new Set(free)] : null
-}
-export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false, forceSharedTest = false, route = 'none', adminChain = null }) {
+export function resolveRunModels({ selected, live = null, fusionEnabled = false, requireShared = false, forceSharedTest = false, route = 'none', adminChain = null, modelList = null }) {
   if (requireShared) {
     if (!fusionEnabled) throw new Error('Required shared Fusion plugin unavailable; refusing free-model fallback')
     // Preserve an explicit connected paid-provider choice outside admin test mode.
     if (selected && selected !== fusionModel && !freeEgressModel(selected) && !forceSharedTest) return { model: selected, models: [selected, fusionModel] }
     return { model: fusionModel, models: [fusionModel] }
   }
-  const chain = (!selected && adminModelChain(adminChain, fusionEnabled)) || defaultModelChain(fusionEnabled)
+  if (Array.isArray(modelList) && modelList.length) {
+    const steps = modelList.filter(row => row && typeof row.model === 'string').map(row => ({ id: String(row.id || row.model), model: row.model, route: ['direct', 'warp', 'backup', 'api'].includes(row.route) ? row.route : 'direct' }))
+    const picked = selected ? steps.findIndex(row => row.model === selected || row.id === selected) : -1
+    const fusion = steps.filter(row => row.model === fusionModel)
+    const ordered = picked >= 0
+      ? [{ ...steps[picked] }, ...steps.filter((_, index) => index !== picked)]
+      : [...fusion, ...steps.filter(row => row.model !== fusionModel)]
+    const extra = selected && picked < 0 ? [{ id: selected, model: selected, route: route === 'warp' ? 'warp' : 'direct' }, ...ordered] : ordered
+    return { model: extra[0].model, models: extra.map(row => row.model), routes: extra.map(row => row.route), steps: extra }
+  }
+  const chain = defaultModelChain(fusionEnabled)
   const fallback = chain.find(id => !live || !id.startsWith('opencode/') || live.includes(id)) || chain[0]
   const usable = id => !live || !id.startsWith('opencode/') || !id.endsWith('-free') || live.includes(id)
   const model = selected && usable(selected) ? selected : fallback
-  return { model, models: route === 'own' && model === fusionModel ? [fusionModel] : modelCandidates(model, live, chain) }
+  const models = route === 'own' && model === fusionModel ? [fusionModel] : modelCandidates(model, live, chain)
+  return { model, models, routes: models.map(() => route === 'warp' ? 'warp' : route === 'api' ? 'api' : route === 'backup' ? 'backup' : 'direct') }
 }
 export function retryableProviderError(error) {
   if (!error || typeof error !== 'object') return false
@@ -161,37 +164,10 @@ export async function terminalAttemptOutcome({ api, sessionID, started, pause = 
 export function freeEgressModel(model) {
   return model !== fusionModel && (preferredFreeModels.includes(model) || /^opencode\/[\w.-]+-free$/.test(String(model)))
 }
-/**
- * Place the admin-configured backup endpoint after every model but before Fusion.
- * Fusion moves to the very end so a free-model failure never jumps straight to a shared donor.
- */
-export function appendBackupModel(candidates, env = process.env) {
-  const backup = String(env.OMG_BACKUP_MODEL || '').trim()
-  if (!backup || !/^[\w.-]+\/[\w./:-]+$/.test(backup)) return candidates
-  const queue = candidates.filter(model => model !== backup && model !== fusionModel)
-  const fusion = candidates.includes(fusionModel) ? [fusionModel] : []
-  return [...queue, backup, ...fusion]
-}
-
-/**
- * Apply admin "skip direct OpenCode" routing: remove free OpenCode models from the chain.
- * Route order with SKIP_DIRECT_OC=1:
- * - WARP on: try through WARP proxy → backup → Fusion
- * - WARP off: backup → Fusion only (no free model calls)
- * Fusion is kept because it's not a "direct OpenCode" call.
- */
-export function applySkipDirectRouting(candidates, env = process.env) {
-  if (env.SKIP_DIRECT_OC !== '1') return candidates
-  const backup = String(env.OMG_BACKUP_MODEL || '').trim()
-  // Without the ondev backup endpoint configured, skipping would leave nothing but Fusion; keep today's chain.
-  if (!backup || !candidates.includes(backup)) return candidates
-  return candidates.filter(model => !freeEgressModel(model))
-}
-// Lazy egress: WARP was skipped because Default starts with Fusion (WARP_LAZY=1). Before the
-// first free model runs, set WARP up and restart `opencode serve` behind it.
+// Lazy egress: WARP is a model-list route. Before that row runs, set WARP up and
+// restart `opencode serve` behind it.
 // Exit 0 = WARP, other = runner network. Runs at most once.
 export function lazyProxySetup({ env = process.env, binary, logFile }) {
-  if (env.WARP_LAZY !== '1') return null
   const script = join(dirname(fileURLToPath(import.meta.url)), 'lazy-proxy-setup.sh')
   return () => new Promise(done => {
     const fd = openSync(logFile, 'a')
@@ -215,16 +191,16 @@ export function proxyDrop({ env = process.env, binary, logFile }) {
     child.on('close', status => { closeSync(fd); done(status === 0) })
   })
 }
-export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, dropProxy, lazyProxy = lazyProxySetup({ env, binary, logFile }) }) {
+export async function runModels({ binary, port, promptFile, logFile, exitFile, selected, models = modelCandidates(selected), routes = null, env = process.env, api = env.OPENCODE_PASSWORD ? createV2Client({ base: `http://127.0.0.1:${port}`, password: env.OPENCODE_PASSWORD }) : null, dropProxy, lazyProxy = lazyProxySetup({ env, binary, logFile }) }) {
   const directory = dirname(logFile), prompt = readFileSync(promptFile, 'utf8')
   const requiredShared = env.FUSION_REQUIRE_SHARED === 'true'
   if (requiredShared && env.FUSION_ROUTE !== 'shared') throw new Error('Required shared Fusion route unavailable')
   const strictFusion = requiredShared && (env.FUSION_FORCE_SHARED_TEST === 'true' || !selected || selected === fusionModel || freeEgressModel(selected)) || env.FUSION_ROUTE === 'own' && selected === fusionModel
-  const candidates = strictFusion ? [fusionModel] : [...new Set(models)].filter(model => !requiredShared || !freeEgressModel(model))
+  const candidates = strictFusion ? [fusionModel] : models.filter(model => !requiredShared || !freeEgressModel(model))
   if (!candidates.length || candidates.some(model => typeof model !== 'string' || !/^[\w.-]+\/[\w./:-]+$/.test(model))) throw new Error('Invalid model fallback candidates')
-  // Last resort: the site-wide backup endpoint, only after every chain model failed.
-  // Apply admin skip_direct_opencode routing: remove free models if SKIP_DIRECT_OC=1.
-  const queue = applySkipDirectRouting(appendBackupModel(candidates, env), env)
+  // The saved model list already carries order and route; do not reorder or append.
+  const queue = candidates
+  const routeList = Array.isArray(routes) ? routes : queue.map(() => 'direct')
   let sessionID = env.RESUME_SESSION_ID || '', child, interrupted = false, code = 1
   const attempts = []
   let fusionSwitched = false, dropped = false
@@ -235,9 +211,9 @@ export async function runModels({ binary, port, promptFile, logFile, exitFile, s
     for (let index = 0; index < queue.length; index++) {
       const model = queue[index]
       if (interrupted) break
-      if (lazyProxy && freeEgressModel(model)) {
+      if (lazyProxy && routeList[index] === 'warp') {
         const setup = lazyProxy; lazyProxy = null
-        appendFileSync(logFile, '[model-fallback] Leaving Fusion for a free model; setting up the WARP proxy now.\n')
+        appendFileSync(logFile, '[model-fallback] Reached a WARP model row; setting up the WARP proxy now.\n')
         const mode = await setup().catch(() => 'none')
         appendFileSync(logFile, `[model-fallback] Lazy proxy: ${mode}.\n`)
       }
@@ -316,7 +292,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [binary, port, promptFile, logFile, exitFile, selected] = process.argv.slice(2)
   try {
     const result = await runModels({ binary, port, promptFile, logFile, exitFile, selected,
-      models: process.env.OPENCODE_MODELS_JSON ? JSON.parse(process.env.OPENCODE_MODELS_JSON) : modelCandidates(selected, null, defaultModelChain(Boolean(process.env.FUSION_ACCESS_TOKEN))) })
+      models: process.env.OPENCODE_MODELS_JSON ? JSON.parse(process.env.OPENCODE_MODELS_JSON) : modelCandidates(selected, null, defaultModelChain(Boolean(process.env.FUSION_ACCESS_TOKEN))),
+      routes: process.env.OPENCODE_MODEL_ROUTES_JSON ? JSON.parse(process.env.OPENCODE_MODEL_ROUTES_JSON) : null })
     process.exitCode = result.code
   } catch {
     appendFileSync(logFile, '[model-fallback] Model execution setup failed. Inspect the workflow configuration.\n')
