@@ -1237,6 +1237,7 @@ function enterRace(trackData) {
   const world = createRaceWorld(trackData, {
     playerColor: hexToInt(playerLivery.body),
     scenery: setup.scenery,
+    trackName: trackData.name,
     aiTeams: AI_TEAMS.map((team) => ({ name: team.name, number: team.number, paint: team.paint }))
   });
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 7000);
