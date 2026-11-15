@@ -815,8 +815,17 @@ export function createRaceWorld(track, options = {}) {
   gantry.add(banner);
   const bannerTex = canvasTexture(makeTextCanvas(512, 96, (ctx, w, h) => {
     ctx.fillStyle = '#111318'; ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#f3efe5'; ctx.font = '700 52px Rajdhani'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('APEX INK', w / 2, h / 2 + 2);
+    ctx.fillStyle = '#f3efe5';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const title = `${options.trackName || track.name || 'APEX INK'} GRAND PRIX`;
+    let fontSize = 52;
+    ctx.font = `700 ${fontSize}px Rajdhani`;
+    while (ctx.measureText(title).width > w - 24 && fontSize > 24) {
+      fontSize -= 2;
+      ctx.font = `700 ${fontSize}px Rajdhani`;
+    }
+    ctx.fillText(title, w / 2, h / 2 + 2);
   }));
   disposables.push(bannerTex);
   const bannerPlane = new THREE.Mesh(new THREE.PlaneGeometry(track.halfWidth * 1.5, 1.5), new THREE.MeshBasicMaterial({ map: bannerTex }));
@@ -1434,10 +1443,9 @@ export function createRaceWorld(track, options = {}) {
       scene.add(rails);
     }
 
-    // A continuous perimeter wall sits well behind the grandstands. Its height
-    // leaves the outer city skyline visible above it without crowding the track.
+    // Keep the perimeter wall just behind the typical grandstand back edge.
     const wallSegments = [];
-    const wallOffset = track.halfWidth + 105;
+    const wallOffset = track.halfWidth + 52;
     const wallStep = Math.max(1, Math.round(9 / track.step));
     for (let i = 0; i < track.N; i += wallStep) {
       const next = (i + wallStep) % track.N;
@@ -2264,15 +2272,17 @@ export function createRaceWorld(track, options = {}) {
     const fascia = new THREE.Mesh(new THREE.BoxGeometry(10.6, 0.42, 0.22), teamMat);
     fascia.position.set(0, 6.36, -4.5);
     g.add(fascia);
-    const signTex = garageSignTexture(team.name, team.number, colorHex);
-    disposables.push(signTex);
-    const sign = new THREE.Mesh(signGeo, new THREE.MeshStandardMaterial({
-      map: signTex, roughness: 0.62, metalness: 0.05,
-      emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0.12, side: THREE.DoubleSide
-    }));
-    sign.position.set(0, 5.62, -4.6);
-    sign.rotation.y = Math.PI;
-    g.add(sign);
+    if (!team.player) {
+      const signTex = garageSignTexture(team.name, team.number, colorHex);
+      disposables.push(signTex);
+      const sign = new THREE.Mesh(signGeo, new THREE.MeshStandardMaterial({
+        map: signTex, roughness: 0.62, metalness: 0.05,
+        emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0.12, side: THREE.DoubleSide
+      }));
+      sign.position.set(0, 5.62, -4.6);
+      sign.rotation.y = Math.PI;
+      g.add(sign);
+    }
 
     // Pit canopy over the box, with a lit leading edge.
     const canopy = new THREE.Mesh(pitCanopyGeo, roofMat);
@@ -2385,51 +2395,6 @@ export function createRaceWorld(track, options = {}) {
     truck.position.set(0, 0.02, 9.6);
     truck.rotation.y = rng() < 0.5 ? 0 : Math.PI;
     garages[i].add(truck);
-  }
-
-  /* ── advertising boards ─────────────────────────────────────── */
-  const sponsors = [
-    ['APEX INK', 'DRAW IT. RACE IT.'],
-    ['REDLINE', 'PERFORMANCE INK'],
-    ['NO BRAKES', 'JUST BALLS'],
-    ['TURN IT UP', 'SECTOR 02'],
-    ['V-MAX', 'AERODYNAMICS'],
-    ['SLIPSTREAM', 'SOCIAL CLUB'],
-    ['GRIP', 'ENGINEERED'],
-    ['PACE', 'MOTORSPORT'],
-    ['INK & ASPHALT', 'EST. 2026']
-  ];
-  const sponsorTextures = sponsors.map(([a, b]) => {
-    const tex = sponsorTexture(a, b);
-    disposables.push(tex);
-    return tex;
-  });
-  const boardFrameMat = new THREE.MeshStandardMaterial({ color: 0x24272d, roughness: 0.5, metalness: 0.7 });
-  const boardCount = 14;
-  const boardSpots = [];
-  for (let i = 0; i < boardCount; i++) {
-    const idx = Math.round((i + 0.4) * track.N / boardCount) % track.N;
-    const s = track.samples[idx];
-    if (Math.abs(s.s) < 45 || s.s > track.length - 60) continue;
-    const side = i % 2 === 0 ? 1 : -1;
-    boardSpots.push({ s, side, i });
-  }
-  for (const { s, side, i } of boardSpots) {
-    const g = new THREE.Group();
-    const panelMat = new THREE.MeshStandardMaterial({ map: sponsorTextures[i % sponsorTextures.length], roughness: 0.7, side: THREE.DoubleSide });
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 2.0), panelMat);
-    panel.position.y = 2.2;
-    g.add(panel);
-    for (const x of [-2.4, 2.4]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.4, 0.12), boardFrameMat);
-      post.position.set(x, 1.2, 0.02);
-      g.add(post);
-    }
-    const offset = side * (track.halfWidth + 10.5);
-    g.position.set(s.x + s.nx * offset, 0, s.z + s.nz * offset);
-    const inward = side > 0 ? -1 : 1;
-    g.rotation.y = Math.atan2(inward * s.nx, inward * s.nz);
-    scene.add(g);
   }
 
   /* ── tyre barriers at corners ────────────────────────────────── */
@@ -2601,49 +2566,6 @@ export function createRaceWorld(track, options = {}) {
     scene.add(posts);
   }
 
-  /* ── distance boards on the run to the first corner ──────────── */
-  for (const metres of [50, 100, 150, 200, 300]) {
-    const idx = Math.round(metres / track.step) % track.N;
-    const s = track.samples[idx];
-    if (inPitZone(s.s)) continue;
-    const tex = canvasTexture(makeTextCanvas(256, 128, (ctx, w, h) => {
-      ctx.fillStyle = '#12151a';
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeStyle = '#f3efe5';
-      ctx.lineWidth = 5;
-      ctx.strokeRect(4, 4, w - 8, h - 8);
-      ctx.fillStyle = '#f3efe5';
-      ctx.font = '700 72px Rajdhani';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(metres), w / 2, h / 2 - 12);
-      ctx.fillStyle = '#ff4d1f';
-      ctx.font = '600 22px Rajdhani';
-      ctx.fillText('METRES', w / 2, h / 2 + 38);
-    }));
-    disposables.push(tex);
-    const g = new THREE.Group();
-    const panel = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.5, 1.25),
-      new THREE.MeshStandardMaterial({
-        map: tex, roughness: 0.7, side: THREE.DoubleSide,
-        emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.05
-      })
-    );
-    panel.position.y = 2.15;
-    panel.rotation.y = Math.PI;
-    g.add(panel);
-    for (const px of [-0.95, 0.95]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.9, 0.1), boardFrameMat);
-      post.position.set(px, 1.45, 0);
-      g.add(post);
-    }
-    const off = -(track.halfWidth + 4.6);
-    g.position.set(s.x + s.nx * off, 0, s.z + s.nz * off);
-    g.rotation.y = Math.atan2(-s.tx, -s.tz) + Math.PI;
-    scene.add(g);
-  }
-
   /* ── floodlight masts ────────────────────────────────────────── */
   const lampMat = new THREE.MeshStandardMaterial({ color: 0xdfe4e8, emissive: 0xfff3d8, emissiveIntensity: 0.5, roughness: 0.4 });
   const glowTex = createCanvasTexture([128, 128], (ctx, w, h) => {
@@ -2704,62 +2626,6 @@ export function createRaceWorld(track, options = {}) {
 
   function matteMetal() {
     return new THREE.MeshStandardMaterial({ color: 0x2b2e34, roughness: 0.45, metalness: 0.8 });
-  }
-
-  /* ── pit entry and exit gantries ─────────────────────────────── */
-  const pitSignTextures = [
-    { index: 3, label: 'PIT ENTRY', sub: '60 KM/H' },
-    { index: pitRoute.length - 4, label: 'PIT EXIT', sub: 'MERGE WITH CARE' }
-  ];
-  for (const sign of pitSignTextures) {
-    const route = pitRoute[Math.max(0, Math.min(pitRoute.length - 1, sign.index))];
-    const g = new THREE.Group();
-    const postH = 6.4;
-    for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, postH, 0.32), metalMat);
-      post.position.set(side * (PIT_ROAD_HALF + 1.1), postH * 0.5, 0);
-      post.castShadow = true;
-      g.add(post);
-      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.3, 0.7), darkMetalMat);
-      foot.position.set(side * (PIT_ROAD_HALF + 1.1), 0.15, 0);
-      g.add(foot);
-    }
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(PIT_ROAD_HALF * 2 + 2.9, 0.55, 0.55), metalMat);
-    beam.position.y = postH;
-    beam.castShadow = true;
-    g.add(beam);
-    const tex = canvasTexture(makeTextCanvas(512, 128, (ctx, w, h) => {
-      ctx.fillStyle = '#12151a';
-      ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = '#ff4d1f';
-      ctx.fillRect(0, 0, w, 9);
-      ctx.fillRect(0, h - 9, w, 9);
-      ctx.fillStyle = '#f3efe5';
-      ctx.font = '700 58px Rajdhani';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(sign.label, w / 2, 52);
-      ctx.fillStyle = '#e0a83c';
-      ctx.font = '600 26px Rajdhani';
-      ctx.fillText(sign.sub, w / 2, 98);
-    }));
-    disposables.push(tex);
-    const panel = new THREE.Mesh(
-      new THREE.PlaneGeometry(PIT_ROAD_HALF * 2 + 2.2, 1.55),
-      new THREE.MeshBasicMaterial({ map: tex })
-    );
-    panel.position.set(0, postH - 1.15, -0.32);
-    panel.rotation.y = Math.PI;
-    g.add(panel);
-    const back = new THREE.Mesh(
-      new THREE.BoxGeometry(PIT_ROAD_HALF * 2 + 2.5, 1.9, 0.22),
-      signMat
-    );
-    back.position.set(0, postH - 1.15, 0.05);
-    g.add(back);
-    g.position.set(route.x, 0, route.z);
-    g.rotation.y = Math.atan2(route.tx, route.tz);
-    scene.add(g);
   }
 
   /* ── dust haze ───────────────────────────────────────────────── */
