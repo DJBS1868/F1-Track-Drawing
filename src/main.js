@@ -34,7 +34,7 @@ const dom = {
   hudPosition: $('hud-position'), hudPositionTotal: $('hud-position-total'), hudLap: $('hud-lap'),
   leaderboardRows: $('leaderboard-rows'),
   hudTime: $('hud-time'), hudLast: $('hud-last'), hudBest: $('hud-best'),
-  btnPause: $('btn-pause'),
+  btnPause: $('btn-pause'), btnCamera: $('btn-camera'), hudCameraLabel: $('hud-camera-label'),
   hudSpeed: $('hud-speed'), hudGear: $('hud-gear'), speedoFill: $('speedo-fill'),
   speedoTicks: $('speedo-ticks'), throttleFill: $('throttle-fill'),
   minimap: $('minimap'), minimapTrackName: $('minimap-track-name'), hudDrs: $('hud-drs'),
@@ -1531,6 +1531,7 @@ function resetRaceState() {
   r.resultsShown = false;
   r.cameraReady = false;
   r.cameraMode = 0;
+  updateCameraUI();
   r.pitCamBlend = 0;
   r.leaderTimer = 0;
   r.gapShown = {};
@@ -3357,6 +3358,34 @@ const camPitPos = new THREE.Vector3();
 const camPitLook = new THREE.Vector3();
 const camUp = new THREE.Vector3(0, 1, 0);
 
+// Cameras an F1 broadcast or game would offer: the default chase, a wide
+// broadcast chase, both onboard styles (cockpit and helmet), the overhead
+// T-cam, the nose cone, a low bumper chase and a side-mounted TV pod.
+const CAMERA_MODES = [
+  { name: 'CHASE CAM', short: 'CHASE' },
+  { name: 'FAR CHASE', short: 'FAR' },
+  { name: 'COCKPIT CAM', short: 'COCKPIT' },
+  { name: 'T-CAM', short: 'T-CAM' },
+  { name: 'NOSE CAM', short: 'NOSE' },
+  { name: 'LOW CHASE', short: 'LOW' },
+  { name: 'TV POD', short: 'TV POD' },
+  { name: 'HELMET CAM', short: 'HELMET' }
+];
+
+function updateCameraUI() {
+  const mode = CAMERA_MODES[race?.cameraMode ?? 0] || CAMERA_MODES[0];
+  if (dom.hudCameraLabel) dom.hudCameraLabel.textContent = mode.short;
+  if (dom.btnCamera) dom.btnCamera.title = `Camera: ${mode.name} (C)`;
+}
+
+function cycleCamera() {
+  if (appState !== 'race' || !race) return;
+  race.cameraMode = (race.cameraMode + 1) % CAMERA_MODES.length;
+  updateCameraUI();
+  toast(CAMERA_MODES[race.cameraMode].name, 1600);
+  audio.click(560);
+}
+
 const PIT_CAM_LEAD = 11;
 const PIT_CAM_EXIT = 10;
 
@@ -3434,37 +3463,92 @@ function updateRaceCamera(dt) {
   let look = chaseLook;
   let rigid = false;
 
-  if (race.cameraMode === 1) {
-    desired = camVecB.set(
-      carPos.x - fx * 17 + rx * 5,
-      7.2,
-      carPos.z - fz * 17 + rz * 5
-    );
-    look = camVecC.set(carPos.x + fx * 14, 1.0, carPos.z + fz * 14);
-    fov = 48;
-  } else if (race.cameraMode === 2) {
-    // Cockpit: rigidly attached, no smoothing lag at all.
-    desired = camVecB.set(
-      carPos.x + cfx * 0.34 + Math.cos(p.yaw) * 0.02,
-      1.16,
-      carPos.z + cfz * 0.34 - Math.sin(p.yaw) * 0.02
-    );
-    look = camVecC.set(carPos.x + cfx * 34, 0.82, carPos.z + cfz * 34);
-    fov = 76;
-    rigid = true;
+  switch (race.cameraMode) {
+    case 1: // Far chase — the wide broadcast shot.
+      desired = camVecB.set(
+        carPos.x - fx * 19 + rx * 4.5,
+        8.4,
+        carPos.z - fz * 19 + rz * 4.5
+      );
+      look = camVecC.set(carPos.x + fx * 16, 0.9, carPos.z + fz * 16);
+      fov = 46;
+      break;
+    case 2: // Cockpit: rigidly attached, no smoothing lag at all.
+      desired = camVecB.set(
+        carPos.x + cfx * 0.34,
+        1.16,
+        carPos.z + cfz * 0.34
+      );
+      look = camVecC.set(carPos.x + cfx * 34, 0.82, carPos.z + cfz * 34);
+      fov = 76;
+      rigid = true;
+      break;
+    case 3: // T-cam: broadcast lens just above the airbox.
+      desired = camVecB.set(
+        carPos.x + cfx * 0.16,
+        1.58,
+        carPos.z + cfz * 0.16
+      );
+      look = camVecC.set(carPos.x + cfx * 30, 0.72, carPos.z + cfz * 30);
+      fov = 78;
+      rigid = true;
+      break;
+    case 4: // Nose cam, mounted on the nose tip ahead of the front wing.
+      desired = camVecB.set(
+        carPos.x + cfx * 2.95,
+        0.5,
+        carPos.z + cfz * 2.95
+      );
+      look = camVecC.set(carPos.x + cfx * 40, 0.56, carPos.z + cfz * 40);
+      fov = 84;
+      rigid = true;
+      break;
+    case 5: // Low bumper chase, close to the tarmac.
+      desired = camVecB.set(
+        carPos.x - fx * (4.3 + speedT * 1.3) + rx * 0.1,
+        0.9 + speedT * 0.18,
+        carPos.z - fz * (4.3 + speedT * 1.3) + rz * 0.1
+      );
+      look = camVecC.set(carPos.x + fx * 16, 0.62, carPos.z + fz * 16);
+      fov = 68 + speedT * 12;
+      break;
+    case 6: // TV pod: side-mounted onboard looking down the flank.
+      desired = camVecB.set(
+        carPos.x + cfx * 0.5 + rx * 1.05,
+        1.24,
+        carPos.z + cfz * 0.5 + rz * 1.05
+      );
+      look = camVecC.set(carPos.x + cfx * 30, 0.85, carPos.z + cfz * 30);
+      fov = 70;
+      rigid = true;
+      break;
+    case 7: // Helmet cam: driver's eye height, with the halo bar in frame.
+      desired = camVecB.set(
+        carPos.x + cfx * 0.3,
+        1.07,
+        carPos.z + cfz * 0.3
+      );
+      look = camVecC.set(carPos.x + cfx * 38, 0.8, carPos.z + cfz * 38);
+      fov = 82;
+      rigid = true;
+      break;
+    default:
+      break;
   }
 
   if (race.state === 'countdown') {
     const k = smoothstep(0, 1, clamp(race.countdownT / 3.2, 0, 1));
+    const targetPos = desired.clone();
+    const targetLook = look.clone();
     const introPos = camVecD.set(
       carPos.x - fx * 32 + rx * 16,
       24,
       carPos.z - fz * 32 + rz * 16
     );
     const introLook = camVecC.set(carPos.x + fx * 14, 0.6, carPos.z + fz * 14);
-    desired = introPos.clone().lerp(chasePos, k);
-    look = introLook.clone().lerp(chaseLook, k);
-    fov = lerp(52, 60, k);
+    desired = introPos.clone().lerp(targetPos, k);
+    look = introLook.clone().lerp(targetLook, k);
+    fov = lerp(52, fov, k);
     rigid = false;
   }
 
@@ -3867,10 +3951,7 @@ window.addEventListener('keydown', (e) => {
     audio.toggle();
     refreshSoundUI();
   } else if (e.code === 'KeyC' && appState === 'race' && race) {
-    race.cameraMode = (race.cameraMode + 1) % 3;
-    const names = ['CHASE CAM', 'WIDE CAM', 'ONBOARD CAM'];
-    toast(names[race.cameraMode]);
-    audio.click(520);
+    cycleCamera();
   } else if (e.code === 'KeyR' && appState === 'race' && race && race.state === 'racing') {
     if (race.pit.phase === 'driving-in' || race.pit.phase === 'servicing' || race.pit.phase === 'driving-out') return;
     recoverPlayer(false);
@@ -4109,6 +4190,10 @@ function wireEvents() {
   });
 
   dom.btnPause.addEventListener('click', pauseRace);
+  dom.btnCamera?.addEventListener('click', () => {
+    audio.ensure();
+    cycleCamera();
+  });
   dom.btnResume.addEventListener('click', resumeRace);
   dom.btnRestartRace.addEventListener('click', restartRace);
   dom.btnNewTrack.addEventListener('click', goToDraw);
