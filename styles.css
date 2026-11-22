@@ -680,6 +680,16 @@ a { color: inherit; }
 .timing-splits b { font-family: var(--font-mono); font-weight: 500; font-size: 9px; color: #d0d1d4; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
 .timing-splits b.best { color: var(--good); }
 .hud-pause { margin-top: 2px; pointer-events: auto; flex: none; background: rgba(10,12,16,.6); backdrop-filter: blur(8px); }
+.hud-camera {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  width: auto; min-width: 38px; height: 38px; margin-top: 2px; padding: 0 13px 0 10px;
+  border-radius: 999px; pointer-events: auto; flex: none;
+  background: rgba(10,12,16,.6); backdrop-filter: blur(8px);
+  font-family: var(--font-mono); font-size: 8px; letter-spacing: .12em; color: var(--cream);
+}
+.hud-camera svg { width: 16px; height: 16px; flex: none; }
+.hud-camera span { line-height: 1; white-space: nowrap; }
+.hud-camera:hover span { color: var(--orange); }
 
 .hud-bottom { position: absolute; left: 26px; right: 26px; bottom: 20px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
 
@@ -1216,6 +1226,8 @@ a { color: inherit; }
   .timing-main strong { font-size: 21px; }
   .timing-splits { display: none; }
   .hud-pause { width: 32px; height: 32px; }
+  .hud-camera { width: 32px; min-width: 32px; height: 32px; padding: 0; }
+  .hud-camera span { display: none; }
   .hud-bottom { left: 12px; right: 12px; bottom: 12px; align-items: flex-end; }
   .speedo { width: 190px; height: 105px; padding: 6px; background: rgba(10,12,16,.55); }
   .speedo-arc { left: 12px; top: 8px; width: 166px; height: 94px; }
