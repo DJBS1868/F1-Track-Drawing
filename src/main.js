@@ -2273,6 +2273,14 @@ function updatePlayerVisual(dt) {
     w.spin.rotation.x += (p.vLong / w.radius) * dt;
     if (w.front) w.steer.rotation.y = damp(w.steer.rotation.y, steerVisual, 18, dt);
   }
+  if (car.steeringWheel) {
+    car.steeringWheel.rotation.z = damp(
+      car.steeringWheel.rotation.z,
+      clamp(-steerVisual * 2.4, -0.85, 0.85),
+      14,
+      dt
+    );
+  }
   car.setBrake(p.brake > 0.08 || race.state === 'finished');
   car.setDRS(p.drs);
 
@@ -3359,8 +3367,8 @@ const camPitLook = new THREE.Vector3();
 const camUp = new THREE.Vector3(0, 1, 0);
 
 // Cameras an F1 broadcast or game would offer: the default chase, a wide
-// broadcast chase, both onboard styles (cockpit and helmet), the overhead
-// T-cam, the nose cone, a low bumper chase and a side-mounted TV pod.
+// broadcast chase, the driver's-eye cockpit, the overhead T-cam, the nose
+// cone, a low bumper chase and a side-mounted TV pod.
 const CAMERA_MODES = [
   { name: 'CHASE CAM', short: 'CHASE' },
   { name: 'FAR CHASE', short: 'FAR' },
@@ -3368,8 +3376,7 @@ const CAMERA_MODES = [
   { name: 'T-CAM', short: 'T-CAM' },
   { name: 'NOSE CAM', short: 'NOSE' },
   { name: 'LOW CHASE', short: 'LOW' },
-  { name: 'TV POD', short: 'TV POD' },
-  { name: 'HELMET CAM', short: 'HELMET' }
+  { name: 'TV POD', short: 'TV POD' }
 ];
 
 function updateCameraUI() {
@@ -3473,14 +3480,14 @@ function updateRaceCamera(dt) {
       look = camVecC.set(carPos.x + fx * 16, 0.9, carPos.z + fz * 16);
       fov = 46;
       break;
-    case 2: // Cockpit: rigidly attached, no smoothing lag at all.
+    case 2: // Driver's eye: bolted to the seat, looking over the wheel.
       desired = camVecB.set(
-        carPos.x + cfx * 0.34,
-        1.16,
-        carPos.z + cfz * 0.34
+        carPos.x + cfx * 0.05,
+        1.04,
+        carPos.z + cfz * 0.05
       );
-      look = camVecC.set(carPos.x + cfx * 34, 0.82, carPos.z + cfz * 34);
-      fov = 76;
+      look = camVecC.set(carPos.x + cfx * 38, 0.82, carPos.z + cfz * 38);
+      fov = 84;
       rigid = true;
       break;
     case 3: // T-cam: broadcast lens just above the airbox.
@@ -3520,16 +3527,6 @@ function updateRaceCamera(dt) {
       );
       look = camVecC.set(carPos.x + cfx * 30, 0.85, carPos.z + cfz * 30);
       fov = 70;
-      rigid = true;
-      break;
-    case 7: // Helmet cam: driver's eye height, with the halo bar in frame.
-      desired = camVecB.set(
-        carPos.x + cfx * 0.3,
-        1.07,
-        carPos.z + cfz * 0.3
-      );
-      look = camVecC.set(carPos.x + cfx * 38, 0.8, carPos.z + cfz * 38);
-      fov = 82;
       rigid = true;
       break;
     default:

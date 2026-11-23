@@ -253,6 +253,105 @@ function makeWheel(front, accentMat) {
   return { steer, spin, radius, width };
 }
 
+function roundedRectShape(width, height, radius) {
+  const w = width / 2;
+  const h = height / 2;
+  const shape = new THREE.Shape();
+  shape.moveTo(-w + radius, -h);
+  shape.lineTo(w - radius, -h);
+  shape.quadraticCurveTo(w, -h, w, -h + radius);
+  shape.lineTo(w, h - radius);
+  shape.quadraticCurveTo(w, h, w - radius, h);
+  shape.lineTo(-w + radius, h);
+  shape.quadraticCurveTo(-w, h, -w, h - radius);
+  shape.lineTo(-w, -h + radius);
+  shape.quadraticCurveTo(-w, -h, -w + radius, -h);
+  return shape;
+}
+
+// F1 steering wheel: carbon rim, rubber grips, central data screen, rotary
+// knobs, coloured buttons and a row of shift lights. The mount faces the
+// driver so the whole face is readable from the cockpit camera.
+function makeSteeringWheel({ rimMat, carbonMat, gripMat, screenMat, accentMat }) {
+  const mount = new THREE.Group();
+  const spin = new THREE.Group();
+  mount.add(spin);
+
+  const face = roundedRectShape(0.3, 0.18, 0.05);
+  face.holes.push(roundedRectShape(0.215, 0.094, 0.028));
+  const rimGeo = new THREE.ExtrudeGeometry(face, {
+    depth: 0.032, bevelEnabled: true, bevelThickness: 0.006,
+    bevelSize: 0.006, bevelSegments: 2, curveSegments: 8
+  });
+  rimGeo.translate(0, 0, -0.016);
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  spin.add(rim);
+
+  for (const side of [-1, 1]) {
+    const grip = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.074, 4, 10), gripMat);
+    grip.position.set(side * 0.153, 0, 0.002);
+    grip.rotation.z = side * 0.055;
+    spin.add(grip);
+    const hand = new THREE.Mesh(new THREE.CapsuleGeometry(0.033, 0.05, 4, 8), gripMat);
+    hand.position.set(side * 0.152, -0.006, 0.032);
+    hand.rotation.z = side * 0.08;
+    spin.add(hand);
+    const cuff = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.012, 0.045), accentMat);
+    cuff.position.set(side * 0.152, -0.054, 0.028);
+    spin.add(cuff);
+  }
+
+  const bezel = new THREE.Mesh(new THREE.BoxGeometry(0.132, 0.064, 0.008), gripMat);
+  bezel.position.set(0, 0, 0.034);
+  spin.add(bezel);
+  const screen = new THREE.Mesh(new THREE.BoxGeometry(0.112, 0.046, 0.005), screenMat);
+  screen.position.set(0, 0, 0.039);
+  spin.add(screen);
+
+  const buttonMats = [
+    new THREE.MeshStandardMaterial({ color: 0xff3b2f, emissive: 0xff3b2f, emissiveIntensity: 0.45, roughness: 0.4 }),
+    new THREE.MeshStandardMaterial({ color: 0x3b7bff, emissive: 0x3b7bff, emissiveIntensity: 0.4, roughness: 0.4 }),
+    new THREE.MeshStandardMaterial({ color: 0xffc63a, emissive: 0xffc63a, emissiveIntensity: 0.4, roughness: 0.4 }),
+    new THREE.MeshStandardMaterial({ color: 0x38e07a, emissive: 0x38e07a, emissiveIntensity: 0.4, roughness: 0.4 })
+  ];
+  const buttons = [
+    [-0.112, 0.047, 0], [0.112, 0.047, 1],
+    [-0.112, -0.047, 2], [0.112, -0.047, 3],
+    [-0.137, 0, 2], [0.137, 0, 1]
+  ];
+  for (const [x, y, mat] of buttons) {
+    const button = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.01, 10), buttonMats[mat]);
+    button.rotation.x = Math.PI / 2;
+    button.position.set(x, y, 0.04);
+    spin.add(button);
+  }
+  for (const side of [-1, 1]) {
+    const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.013, 12), gripMat);
+    knob.rotation.x = Math.PI / 2;
+    knob.position.set(side * 0.085, -0.002, 0.043);
+    spin.add(knob);
+  }
+
+  const shiftMats = [buttonMats[3], buttonMats[3], buttonMats[2], buttonMats[0], buttonMats[0]];
+  for (let i = 0; i < shiftMats.length; i++) {
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.008, 0.006), shiftMats[i]);
+    led.position.set((i - 2) * 0.017, 0.073, 0.038);
+    spin.add(led);
+  }
+  const topTrim = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.007, 0.008), accentMat);
+  topTrim.position.set(0, 0.083, 0.033);
+  spin.add(topTrim);
+
+  for (const side of [-1, 1]) {
+    const paddle = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.095, 0.012), carbonMat);
+    paddle.position.set(side * 0.155, -0.004, -0.032);
+    paddle.rotation.z = side * 0.12;
+    spin.add(paddle);
+  }
+
+  return { mount, spin };
+}
+
 export function createCar({
   paint = 0xd20f1c,
   accent = 0xffffff,
@@ -371,19 +470,129 @@ export function createCar({
   }
 
   /* ── cockpit, halo, driver ─────────────────────────────────── */
-  const cockpit = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), matteMat);
-  cockpit.scale.set(0.28, 0.06, 0.36);
-  cockpit.position.set(0, 0.77, 0.14);
-  body.add(cockpit);
+  const interiorMat = new THREE.MeshStandardMaterial({ color: 0x0b0c0f, roughness: 0.94, metalness: 0.04 });
+  const seatMat = new THREE.MeshStandardMaterial({ color: 0x171a1e, roughness: 0.86, metalness: 0.08 });
+  const gripMat = new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.82, metalness: 0.12 });
+  const steeringRimMat = new THREE.MeshStandardMaterial({ color: 0x282c33, roughness: 0.42, metalness: 0.55 });
+  const screenTex = canvasTexture(makeTextCanvas(256, 128, (ctx, w, h) => {
+    ctx.fillStyle = '#031015';
+    ctx.fillRect(0, 0, w, h);
+    const shift = ['#34f07a', '#34f07a', '#ffd23a', '#ff6a3a', '#ff3b2f'];
+    shift.forEach((color, i) => {
+      ctx.fillStyle = color;
+      ctx.fillRect(8 + i * 48, 9, 40, 7);
+    });
+    ctx.fillStyle = '#8ff4ff';
+    ctx.font = '700 42px Rajdhani';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('07', w / 2, 62);
+    ctx.fillStyle = '#73949e';
+    ctx.font = '600 13px Rajdhani';
+    ctx.fillText('LAP 1   ERS 78%', w / 2, 96);
+    ctx.fillStyle = '#1c6a7a';
+    ctx.fillRect(24, 108, 88, 5);
+    ctx.fillStyle = '#34f07a';
+    ctx.fillRect(24, 108, 60, 5);
+    ctx.fillStyle = '#6e3020';
+    ctx.fillRect(144, 108, 88, 5);
+    ctx.fillStyle = '#ff6a3a';
+    ctx.fillRect(144, 108, 42, 5);
+  }));
+  const screenMat = new THREE.MeshStandardMaterial({
+    map: screenTex, emissive: 0xffffff, emissiveMap: screenTex,
+    emissiveIntensity: 0.55, roughness: 0.28, metalness: 0.1
+  });
+
+  // Open cockpit tub: floor, side walls, seat, driver torso and a proper
+  // dashboard/steering-wheel assembly rather than a solid painted bump.
+  const cockpitFloor = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.03, 0.66), interiorMat);
+  cockpitFloor.position.set(0, 0.56, 0.16);
+  body.add(cockpitFloor);
+  for (const side of [-1, 1]) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.17, 0.64), interiorMat);
+    wall.position.set(side * 0.245, 0.645, 0.16);
+    body.add(wall);
+    const hipPad = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.11, 0.34), seatMat);
+    hipPad.position.set(side * 0.205, 0.705, 0.18);
+    body.add(hipPad);
+    const headPad = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.19), seatMat);
+    headPad.position.set(side * 0.235, 0.85, -0.08);
+    body.add(headPad);
+  }
+
+  const bulkhead = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 0.045), interiorMat);
+  bulkhead.position.set(0, 0.68, -0.16);
+  bulkhead.rotation.x = -0.12;
+  body.add(bulkhead);
+
+  const seatBase = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.06, 0.28), seatMat);
+  seatBase.position.set(0, 0.61, 0.08);
+  body.add(seatBase);
+  const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.28, 0.07), seatMat);
+  seatBack.position.set(0, 0.76, -0.075);
+  seatBack.rotation.x = -0.18;
+  body.add(seatBack);
+  for (const side of [-1, 1]) {
+    const bolster = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.1, 0.3), seatMat);
+    bolster.position.set(side * 0.18, 0.68, 0.06);
+    body.add(bolster);
+    const stitch = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.09, 0.26), accentMat);
+    stitch.position.set(side * 0.21, 0.72, 0.05);
+    body.add(stitch);
+  }
+
+  // driver torso under the helmet
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.2, 0.19), seatMat);
+  torso.position.set(0, 0.77, 0.08);
+  body.add(torso);
+  for (const side of [-1, 1]) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.16, 0.012), accentMat);
+    belt.position.set(side * 0.065, 0.82, 0.178);
+    belt.rotation.z = side * 0.16;
+    body.add(belt);
+  }
+
+  const cockpitRim = new THREE.Mesh(new THREE.TorusGeometry(0.255, 0.03, 8, 40), carbonMat);
+  cockpitRim.rotation.x = Math.PI / 2;
+  cockpitRim.scale.set(1, 1.3, 1);
+  cockpitRim.position.set(0, 0.73, 0.13);
+  body.add(cockpitRim);
+  const rimTrim = new THREE.Mesh(new THREE.TorusGeometry(0.255, 0.007, 6, 40), accentMat);
+  rimTrim.rotation.x = Math.PI / 2;
+  rimTrim.scale.set(1, 1.3, 1);
+  rimTrim.position.set(0, 0.762, 0.13);
+  body.add(rimTrim);
+
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.17), carbonMat);
+  dash.position.set(0, 0.76, 0.585);
+  dash.rotation.x = 0.2;
+  body.add(dash);
+  const dashScreen = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.035, 0.006), screenMat);
+  dashScreen.position.set(0, 0.815, 0.565);
+  dashScreen.rotation.x = -0.4;
+  body.add(dashScreen);
+
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.2, 10), carbonMat);
+  column.rotation.x = Math.PI / 2;
+  column.position.set(0, 0.8, 0.575);
+  body.add(column);
+
+  const steeringWheel = makeSteeringWheel({
+    rimMat: steeringRimMat, carbonMat, gripMat, screenMat, accentMat
+  });
+  steeringWheel.mount.position.set(0, 0.8, 0.49);
+  steeringWheel.mount.rotation.set(0.12, Math.PI, 0);
+  body.add(steeringWheel.mount);
 
   const haloMat = new THREE.MeshStandardMaterial({ color: 0x17181c, roughness: 0.4, metalness: 0.7 });
-  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.026, 8, 30), haloMat);
+  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.024, 8, 30), haloMat);
   halo.rotation.x = Math.PI / 2;
-  halo.position.set(0, 0.96, 0.17);
+  halo.position.set(0, 1.115, 0.17);
   body.add(halo);
-  const haloPillar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.2, 0.06), haloMat);
-  haloPillar.position.set(0, 0.86, 0.52);
-  haloPillar.rotation.x = 0.3;
+  const haloPillar = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.31, 0.055), haloMat);
+  haloPillar.position.set(0, 0.96, 0.53);
+  haloPillar.rotation.x = 0.26;
   body.add(haloPillar);
 
   const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.17, 18, 14), helmetMat);
@@ -598,6 +807,7 @@ export function createCar({
 
   return {
     root, body, wheels,
+    steeringWheel: steeringWheel.spin,
     brakeMat, drsGroup, drsFlap,
     get paint() { return paint; },
     player,

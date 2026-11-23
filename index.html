@@ -340,13 +340,6 @@
           <div><span class="mono">BEST LAP</span><b id="hud-best" class="best">—:—.———</b></div>
         </div>
       </div>
-      <button id="btn-camera" class="icon-btn hud-camera" aria-label="Change camera" title="Change camera (C)">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 8.5h3l1.4-2h7.2l1.4 2h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-          <circle cx="12" cy="13" r="3.1" fill="none" stroke="currentColor" stroke-width="1.6"/>
-        </svg>
-        <span id="hud-camera-label">CHASE</span>
-      </button>
       <button id="btn-pause" class="icon-btn hud-pause" aria-label="Pause">
         <svg viewBox="0 0 24 24"><path d="M8 6v12M16 6v12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
       </button>
@@ -372,10 +365,19 @@
         <div class="throttle-strip"><span id="throttle-fill"></span></div>
       </div>
 
-      <div class="minimap-panel">
-        <div class="minimap-head"><span class="mono">SECTOR MAP</span><span class="mono" id="minimap-track-name">CIRCUIT</span></div>
-        <canvas id="minimap" width="520" height="360"></canvas>
-        <div class="minimap-foot"><span><i class="dot dot-you"></i>YOU</span><span><i class="dot dot-ai"></i>RIVALS</span><span id="hud-pit" class="pit-chip" aria-live="polite"></span><span id="hud-tyre" class="tyre-chip" aria-live="polite">TYRES 100%</span><span id="hud-drs" class="drs-chip">DRS READY</span><span id="hud-assist" class="assist-chip">AUTO</span></div>
+      <div class="hud-right-stack">
+        <button id="btn-camera" class="icon-btn hud-camera" aria-label="Change camera" title="Change camera (C)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8.5h3l1.4-2h7.2l1.4 2h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            <circle cx="12" cy="13" r="3.1" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+          <span id="hud-camera-label">CHASE</span>
+        </button>
+        <div class="minimap-panel">
+          <div class="minimap-head"><span class="mono">SECTOR MAP</span><span class="mono" id="minimap-track-name">CIRCUIT</span></div>
+          <canvas id="minimap" width="520" height="360"></canvas>
+          <div class="minimap-foot"><span><i class="dot dot-you"></i>YOU</span><span><i class="dot dot-ai"></i>RIVALS</span><span id="hud-pit" class="pit-chip" aria-live="polite"></span><span id="hud-tyre" class="tyre-chip" aria-live="polite">TYRES 100%</span><span id="hud-drs" class="drs-chip">DRS READY</span><span id="hud-assist" class="assist-chip">AUTO</span></div>
+        </div>
       </div>
     </div>
 
